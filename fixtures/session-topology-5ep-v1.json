@@ -1,0 +1,44 @@
+{
+  "id": "session-topology-5ep-v1",
+  "title": "The Glass Orchid Contract",
+  "titleZh": "玻璃兰契约",
+  "targetEpisodes": 5,
+  "acts": "Act 1: Lin Qiao, a museum conservator, is publicly framed for shattering the Glass Orchid, the only proof that her mother designed the imperial collection. She signs a thirty-day restoration contract with investor Shen Yuze, who needs the orchid for a public auction. Act 2: Lin learns the fragments were switched by her half-sister Su Wan, who needs the auction to erase Lin's mother's authorship. Lin stops asking Shen to rescue her and turns the restoration protocol into a public trap. Act 3: At the auction, Lin makes Su choose between admitting the swap and activating a seal that permanently exposes every forged provenance record. Lin restores the orchid under her own name and chooses a relationship with Shen only after he returns control of the collection to her.",
+  "design": "Core engine: humiliation-to-reclamation with a restrained romance. The Glass Orchid is the recurring object: it is broken in episode 1, its hidden maker mark is discovered in episode 3, and it becomes the irreversible public proof in episode 5. Do not use police, court, DNA, surveillance footage, or a male lead delivering the decisive proof. Episode openings begin inside a human conflict; every tail hook is a completed fact plus a concrete next action. Lin must make the decisive choice in every reversal.",
+  "characters": "Lin Qiao: 26, precise museum conservator; quiet until cornered, then short and exact. Her flaw is apologizing for damage she did not cause. Shen Yuze: 30, auction-house investor; controlled, dry, physically calm under pressure, offers access but never decides for Lin. Su Wan: 27, Lin's half-sister and museum donor liaison; polished, smiling cruelty, treats lineage as property. Master Gu: 60s, retired glass artisan; sparse, practical speech, knows the maker mark. Voice rule: Lin says what she can prove, Shen asks one cutting question instead of explaining, Su weaponizes social embarrassment.",
+  "ledger": {
+    "canonicalNames": ["Lin Qiao", "Shen Yuze", "Su Wan", "Master Gu", "Glass Orchid"],
+    "object": "Glass Orchid",
+    "makerMark": "LQ-17",
+    "deadline": "30 days",
+    "forbidden": ["police", "court", "DNA", "surveillance footage", "male lead delivers decisive proof"],
+    "style": "Chinese scene directions; every spoken line must include English then Chinese translation."
+  },
+  "episodes": [
+    {
+      "episode": 1,
+      "title": "The Shattered Exhibit",
+      "outline": "At the donor preview, Su makes Lin carry the Glass Orchid in front of guests, then knocks it down and names Lin as the careless restorer. Shen stops the guards from taking Lin away only long enough to offer a thirty-day restoration contract. Lin signs it herself after seeing her mother's old inventory code on one shard. Tail hook: Su locks the original fragment in the donor vault and tells Lin she has already sold the story of Lin's failure."
+    },
+    {
+      "episode": 2,
+      "title": "The Donor Vault",
+      "outline": "Lin enters the donor vault with Shen's access card but refuses to let him open the case for her. Su arrives with the board chair and forces Lin to identify the authentic fragment in public. Lin uses a heat test to expose that Su's displayed fragment is a recent replica, but Su takes the real shard and announces Lin is banned from the restoration room. Tail hook: Lin finds a fresh burn mark on Shen's access card, proving someone used it before her."
+    },
+    {
+      "episode": 3,
+      "title": "The Maker Mark",
+      "outline": "Lin confronts Shen with the burned access card; he admits his staff were bribed but gives her the staff list instead of an answer. At Master Gu's workshop, Lin discovers LQ-17 beneath the shard's glaze and realizes her mother hid a restoration sequence in the orchid. Su publicly announces she will unveil a replacement orchid at the auction. Tail hook: Lin presses the LQ-17 mark and a sealed inner petal opens in her hand."
+    },
+    {
+      "episode": 4,
+      "title": "The False Orchid",
+      "outline": "Lin brings the opened inner petal to the auction rehearsal and makes Su demonstrate the replacement orchid's provenance. Shen creates space by delaying the rehearsal, but Lin confronts Su herself. Lin reveals the replacement cannot carry the maker mark; Su retaliates by tearing up Lin's restoration contract in front of the guests. Lin keeps the torn signature page and announces she will restore the original on the auction stage. Tail hook: Su activates the stage lock, trapping Lin's real fragments inside the display case."
+    },
+    {
+      "episode": 5,
+      "title": "The Orchid Opens",
+      "outline": "At the auction, Lin uses the torn signature page's glass fiber to open the locked case, restores the Glass Orchid in full view, and makes its LQ-17 sequence project the original inventory onto the hall wall. Su must either deny the maker mark or activate the provenance seal; she activates it and permanently exposes her own forged donor records. Lin accepts the museum's new conservator role only after Shen transfers the collection's restoration authority to her. Final image: Lin places the restored orchid under her mother's name, then takes Shen's hand by choice."
+    }
+  ]
+}

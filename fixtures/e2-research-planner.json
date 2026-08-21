@@ -1,0 +1,9 @@
+{
+  "title": "The Amber Glass Oath",
+  "brief": "Write a five-episode romance-mystery about a young glass artisan in 1900 Prague who discovers that a rival workshop forged her mother's maker mark. Keep the drama fictional, but use one accurate Art Nouveau visual/material detail only when it improves a scene.",
+  "researchPolicy": {
+    "maxSources": 2,
+    "maxCalls": 3,
+    "allowedTopics": ["Art Nouveau", "glassmaking"]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "title": "The Glass Orchid Contract",
+  "episode": 3,
+  "baseline": {
+    "task": "Write episode 3 as a 700-1000 Chinese-character bilingual screenplay scene. The heroine must act on the maker mark without inventing its current owner.",
+    "currentOutline": "Lin confronts Shen about the access-card burn. At Master Gu's workshop, she must discover the LQ-17 maker mark and open an inner petal. End with the opened petal in her hand.",
+    "characterVoice": "Lin is precise and direct; Shen asks one cutting question instead of explaining; Master Gu is sparse and practical."
+  },
+  "artifacts": {
+    "canonical/ledger.json": {
+      "makerMark": "LQ-17",
+      "canonicalNames": ["Lin Qiao", "Shen Yuze", "Su Wan", "Master Gu"],
+      "forbidden": ["police", "court", "surveillance footage"]
+    },
+    "continuity/ep-02.json": {
+      "realFragmentOwner": "Master Gu",
+      "linQiaoHolds": "a harmless replica shard only",
+      "tailHook": "Lin notices the burned access card and leaves for Master Gu's workshop."
+    },
+    "screenplay/ep-02.md": "Lin sees the burn mark on Shen's access card. Shen gives her the bribed-staff list but does not explain it. Lin leaves for Master Gu's workshop; she does not possess the authentic LQ-17 fragment."
+  }
+}

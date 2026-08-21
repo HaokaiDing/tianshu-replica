@@ -1,0 +1,23 @@
+{
+  "name": "tianshu-agent",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "tianshu": "node bin/tianshu.mjs",
+    "test": "node --test test/*.test.mjs",
+    "experiment:session": "node src/session-topology-experiment.mjs",
+    "experiment:e1": "node src/experiments/e1-artifact-workspace.mjs",
+    "experiment:e2": "node src/experiments/e2-research-planner.mjs",
+    "experiment:e3": "node src/experiments/e3-review-repair.mjs",
+    "experiment:e4": "node src/experiments/e4-storyboard.mjs",
+    "experiment:e4:render": "node src/experiments/e4-storyboard.mjs --stage render",
+    "experiment:e5": "node src/experiments/e5-acceptance.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2"
+  }
+}
