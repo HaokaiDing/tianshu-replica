@@ -40,7 +40,7 @@ export async function reviewScripts(runDir) {
   const plan=repairPlan(findings,m.episodes);writeJson(path.join(runDir,'reviews','repair-plan.json'),plan);
   if(plan.action==='blocked'){m.state='blocked';m.note='review requires human decision';}
   else if(plan.action==='repair'){m.state='blocked';m.note='run tianshu repair after reviewing repair-plan.json';}
-  else m.state='screenplay_reviewed';
+  else m.state='screenplay_review';
   saveManifest(runDir,m);return plan;
 }
 
