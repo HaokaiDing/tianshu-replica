@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { STORYBOARD_HEADER, checkStoryboard, createRun, loadManifest, markdownDelivery, writeText } from "../src/core.mjs";
 import { markStale, repairPlan } from "../src/review.mjs";
+import { applyRepair } from "../src/agents.mjs";
 
 function board(ep=1) {
   const rows=[]; let total=0;
@@ -23,6 +24,15 @@ test('stale propagation invalidates dependent tasks', () => {
   const stale=markStale(dir,[3]);
   assert.deepEqual(stale,['screenplay-ep-04','storyboard-ep-03','storyboard-ep-04']);
   assert.equal(loadManifest(dir).episodes,30);
+});
+test('applyRepair marks the repaired episode and its downstream tasks stale', () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'tianshu-test-'));
+  const {dir}=createRun(root,{title:'测试',episodes:30,input:'x'});
+  fs.mkdirSync(path.join(dir,'reviews'),{recursive:true});
+  fs.writeFileSync(path.join(dir,'reviews','repair-plan.json'),JSON.stringify({action:'repair',episodes:[3],findings:[{episode:3,reason:'repair ep03 seam'}]}));
+  const result=applyRepair(dir);
+  assert.ok(result.stale.includes('screenplay-ep-03'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'tasks','screenplay-ep-03.json'))).repairInstruction,'repair ep03 seam');
 });
 test('delivery requires every checked storyboard', () => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'tianshu-test-'));

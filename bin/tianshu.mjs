@@ -8,7 +8,7 @@ import { applyRepair, plan, produceScripts, produceStoryboards, reviewScripts } 
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
 const [cmd,...args]=process.argv.slice(2);
 const findRun=(id)=>path.join(runRoot(ROOT),id);
-const help=()=>console.log("tianshu init <input> [--title T] [--episodes 30|60] | plan <run> | status <run> | approve <run> | produce <run> | review <run> | repair <run> | storyboard <run> | approve-delivery <run> | return <run> <note> | deliver <run>");
+const help=()=>console.log("tianshu init <input> [--title T] [--episodes 30|60] | plan <run> | status <run> | approve <run> | produce <run> | review <run> | repair <run> | resume <run> | storyboard <run> | approve-delivery <run> | return <run> <note> | deliver <run>");
 const flag=(name)=>{const i=args.indexOf(name);return i>=0?args[i+1]:null;};
 try { if(cmd==="init"){const input=readText(args[0]);const title=flag("--title")||input.split("\n")[0].slice(0,50);const {id}=createRun(ROOT,{title,episodes:flag("--episodes")||30,input});console.log(JSON.stringify({id,state:"draft"}));}
 else if(cmd==="status"){console.log(JSON.stringify(loadManifest(findRun(args[0])),null,2));}
@@ -17,6 +17,7 @@ else if(cmd==="plan"){await plan(findRun(args[0]));console.log(JSON.stringify(lo
 else if(cmd==="produce"){await produceScripts(findRun(args[0]));console.log(JSON.stringify(loadManifest(findRun(args[0]))));}
 else if(cmd==="review"){console.log(JSON.stringify(await reviewScripts(findRun(args[0]))));}
 else if(cmd==="repair"){console.log(JSON.stringify(applyRepair(findRun(args[0]))));}
+else if(cmd==="resume"){const d=findRun(args[0]);const m=loadManifest(d);if(m.state==="screenplay_producing"){await produceScripts(d);console.log(JSON.stringify(loadManifest(d)));}else if(m.state==="storyboard_producing"){await produceStoryboards(d);console.log(JSON.stringify(loadManifest(d)));}else throw new Error(`nothing resumable from ${m.state}`);}
 else if(cmd==="storyboard"){await produceStoryboards(findRun(args[0]));console.log(JSON.stringify(loadManifest(findRun(args[0]))));}
 else if(cmd==="approve-delivery"){const d=findRun(args[0]);const m=loadManifest(d);if(m.state!=="awaiting_delivery_approval")throw new Error(`cannot approve delivery from ${m.state}`);console.log(JSON.stringify(transition(d,"ready_to_deliver","human final delivery approval")));}
 else if(cmd==="return"){console.log(JSON.stringify(transition(findRun(args[0]),"returned",args.slice(1).join(" "))));}
