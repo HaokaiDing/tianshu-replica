@@ -19,7 +19,7 @@ export function createRun(root, { title, episodes = 30, input }) {
   const slug = String(title || "untitled").replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/g, "").slice(0,50) || "untitled";
   const id = `${slug}-${Date.now().toString(36)}`;
   const dir = path.join(runRoot(root), id);
-  for (const sub of ["canonical","screenplay","storyboard","continuity","reviews","research","work","tasks","deliverables"]) fs.mkdirSync(path.join(dir, sub), {recursive:true});
+  for (const sub of ["canonical","screenplay","storyboard","continuity","reviews","research","work","tasks","metrics","deliverables"]) fs.mkdirSync(path.join(dir, sub), {recursive:true});
   const manifest = { id, title: title || "Untitled", episodes: Number(episodes), state:"draft", revision:1, inputDigest:sha(input), createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
   saveManifest(dir, manifest); writeText(path.join(dir,"canonical","input.md"), input); return {id,dir,manifest};
 }
