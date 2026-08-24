@@ -4,11 +4,9 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import {
   createAgentSession,
-  createExtensionRuntime,
   defineTool,
   ModelRuntime,
   SessionManager,
-  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
 const require = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
@@ -83,39 +81,23 @@ export function safeRef(runDir, ref, allowedRoots) {
   return resolved;
 }
 
-function resourceLoader(systemPrompt) {
-  return {
-    getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => systemPrompt,
-    getSystemPromptSource: () => undefined,
-    getAppendSystemPrompt: () => [],
-    getAppendSystemPromptSources: () => [],
-    extendResources: () => {},
-    reload: async () => {},
-  };
-}
+const sessionPrefixes = new WeakMap();
 
 export async function createPiExperimentSession({ runDir, role, systemPrompt, customTools, toolNames, thinkingLevel = "off" }) {
   const modelRuntime = await ModelRuntime.create();
   const model = modelRuntime.getModel("kimi-coding", "k3-256k");
   if (!model) throw new Error("Pi cannot resolve kimi-coding/k3-256k");
-  const metrics = { role, prompts: 0, turns: 0, toolCalls: 0, compactions: 0, usage: [], events: [] };
+  const metrics = { role, prompts: 0, turns: 0, toolCalls: 0, compactions: 0, usage: [], events: [], modelErrors: [] };
   const { session } = await createAgentSession({
     cwd: ROOT,
-    agentDir: path.join(runDir, ".pi-agent"),
     modelRuntime,
     model,
     thinkingLevel,
-    resourceLoader: resourceLoader(systemPrompt),
     tools: toolNames,
     customTools,
     sessionManager: SessionManager.inMemory(ROOT),
-    settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: true, maxRetries: 1 } }),
   });
+  sessionPrefixes.set(session, systemPrompt);
   session.subscribe((event) => {
     if (event.type === "turn_end") metrics.turns += 1;
     if (event.type === "tool_execution_start") {
@@ -127,20 +109,31 @@ export async function createPiExperimentSession({ runDir, role, systemPrompt, cu
       const u = event.message.usage;
       metrics.usage.push({ input: u.input ?? null, output: u.output ?? null, cacheRead: u.cacheRead ?? null, cacheWrite: u.cacheWrite ?? null, totalTokens: u.totalTokens ?? null });
     }
+    if (event.type === "message_end" && event.message?.role === "assistant" && event.message?.stopReason === "error") {
+      metrics.modelErrors.push({ at: Date.now(), stopReason: "error" });
+    }
   });
   return { session, metrics };
 }
 
 export async function promptWithWatchdog(session, metrics, prompt, timeoutMs = 180_000) {
+  const prefix = metrics.prompts === 0 ? sessionPrefixes.get(session) : "";
   metrics.prompts += 1;
-  let timeout = false;
-  const timer = setTimeout(() => { timeout = true; void session.abort(); }, timeoutMs);
-  try {
-    await session.prompt(prompt);
-  } finally {
-    clearTimeout(timer);
+  const request = prefix ? `Role instructions for this session:\n${prefix}\n\nTask:\n${prompt}` : prompt;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const errorsBefore = metrics.modelErrors?.length || 0;
+    let timeout = false;
+    const timer = setTimeout(() => { timeout = true; void session.abort(); }, timeoutMs);
+    try {
+      await session.prompt(request);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (timeout) throw new Error(`Pi task exceeded ${timeoutMs}ms watchdog`);
+    if ((metrics.modelErrors?.length || 0) === errorsBefore) return;
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_500 * (attempt + 1)));
   }
-  if (timeout) throw new Error(`Pi task exceeded ${timeoutMs}ms watchdog`);
+  throw new Error("Pi model returned an error without a usable response after 3 attempts");
 }
 
 export { defineTool };
