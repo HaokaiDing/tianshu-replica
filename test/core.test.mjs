@@ -6,6 +6,7 @@ import test from "node:test";
 import { STORYBOARD_HEADER, checkStoryboard, createRun, loadManifest, markdownDelivery, writeText } from "../src/core.mjs";
 import { markStale, repairPlan } from "../src/review.mjs";
 import { applyRepair } from "../src/agents.mjs";
+import { inferMarketIntent, marketChecks, validateMarketSubmission } from "../src/market.mjs";
 
 function board(ep=1) {
   const rows=[]; let total=0;
@@ -39,4 +40,16 @@ test('delivery requires every checked storyboard', () => {
   const {dir}=createRun(root,{title:'测试',episodes:30,input:'x'});
   for(let ep=1;ep<=30;ep++) writeText(path.join(dir,'storyboard',`ep-${String(ep).padStart(2,'0')}.md`),board(ep));
   assert.ok(markdownDelivery(dir).includes('第30集'));
+});
+test('US market contract rejects Chinese carryover and requires a US anchor', () => {
+  const market=inferMarketIntent('目标受众：美区女性向竖屏短剧');
+  assert.equal(market.country, 'United States');
+  assert.ok(marketChecks('温家客厅，林晚穿旗袍。', market).length >= 2);
+  assert.deepEqual(marketChecks('纽约一家曼哈顿拍卖行里，Maya studies the receipt.', market), []);
+});
+test('planner market submission must match the requested country', () => {
+  const market=inferMarketIntent('目标市场：美国');
+  const valid={country:'United States',setting:'New York contemporary auction world',characterNaming:'Natural contemporary American names',socialContext:'US family wealth and auction institutions',culturalAnchors:['New York','estate sale']};
+  assert.deepEqual(validateMarketSubmission(market, valid), []);
+  assert.ok(validateMarketSubmission(market, {...valid,country:'China'}).length);
 });

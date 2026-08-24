@@ -14,6 +14,7 @@ TianshuAgent 保留旧天书的短剧方法、两阶段人工审核、固定 11 
 - 剧本与分镜：**每 5 集 = 1 个持续 Pi Session**，第 6 集起创建新 session；不跨角色复用 session。
 - 生产 session 使用 `SessionManager.inMemory()`；session 历史是批内创作辅助，不是项目事实来源。
 - 项目事实以版本化纯文件 artifacts、台账和连续性快照为准。
+- 目标市场也是 canonical contract：目标国家决定人物命名、城市、机构、家庭/金钱制度、道具、服装与文化锚点；制作语言不能覆盖这个约束。
 - 不建设数据库、服务端、MCP、看板、飞书交付或通用多 Agent 平台。
 - 对外交付仅为 `<剧名>｜分镜剧本.md` 与 `<剧名>｜分镜剧本.docx`。
 
@@ -66,6 +67,8 @@ runs/<run-id>/
 ├── manifest.json
 ├── events.jsonl
 ├── canonical/
+│   ├── market.json
+│   ├── market-contract.md
 │   ├── acts.md
 │   ├── design.md
 │   ├── outline.md
@@ -82,6 +85,10 @@ runs/<run-id>/
 ```
 
 `canonical/`、`screenplay/`、`storyboard/`、`continuity/`、`reviews/` 和已批准的 `research/` 是只读 canonical artifacts；`work/<task-id>/` 是当前 Agent 唯一可编辑的 scratch workspace。`manifest.json` 是全剧状态；`tasks/*.json` 是每个可恢复单元的状态。Agent session 文件、日志、目录 mtime 均不是项目事实。
+
+### 4.1.1 市场与文化合同
+
+Planner 必须随规划包提交 `market`：国家、主要故事地点、人物命名方式、社会制度语境和至少两个文化锚点。Runtime 由用户 brief 推断目标市场并做一致性验证；Writer、Storyboard 和 Reviewer 每次任务均读取 `market-contract.md`。脚本/分镜在 `run_checks` 时同时检查目标国家锚点和已知错误市场遗留词。以“美区”为例，中文可以是制作说明语言，但故事人物不能再使用中国姓名、温家式宗族关系或中国机构空间。
 
 ### 4.2 Agent Artifact Guide
 
