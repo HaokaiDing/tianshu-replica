@@ -3,18 +3,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { STORYBOARD_HEADER, checkStoryboard, createRun, loadManifest, markdownDelivery, writeText } from "../src/core.mjs";
+import { STORYBOARD_HEADER, checkStoryboard, createRun, loadManifest, markdownDelivery, storyboardWarnings, writeText } from "../src/core.mjs";
 import { markStale, repairPlan } from "../src/review.mjs";
 import { applyRepair } from "../src/agents.mjs";
 import { inferMarketIntent, marketChecks, validateMarketSubmission } from "../src/market.mjs";
 
 function board(ep=1) {
-  const rows=[]; let total=0;
-  for(let i=1;i<=12;i++){total+=5;rows.push(`| ${i} | 功能 | 画面 ${i} | EN: line / 中：台词 | 固定/中景/平视 | 道具 | 连续 | 视觉 | SFX | 5 | ${total} |`);}
+  const rows=[];
+  for(let i=1;i<=12;i++){const id=`ep${String(ep).padStart(2,"0")}-s${String(i).padStart(2,"0")}`;rows.push(`| ${id} | 画面 ${i} | 中：台词<br>EN: line | 固定机位 / 中景 | 人物：A<br>场景：S | 音效：环境声<br>功能：${i%3===0?"情绪停留":"对峙"} | 5 |`);}
   return `# 第${ep}集\n\n| ${STORYBOARD_HEADER.join(' | ')} |\n|${STORYBOARD_HEADER.map(()=> '---').join('|')}|\n${rows.join('\n')}`;
 }
 test('storyboard contract accepts a complete table', () => assert.deepEqual(checkStoryboard(board()), []));
 test('storyboard contract rejects a missing fixed header', () => assert.ok(checkStoryboard('| 镜头号 |\n|---|\n|1|').length));
+test('storyboard warnings flag a board with no reaction beat', () => {
+  const flat=board().replaceAll("情绪停留","对峙");
+  assert.ok(storyboardWarnings(flat).some((w)=>w.includes("反应")));
+  assert.deepEqual(storyboardWarnings(board()), []);
+});
 test('repair plan blocks upstream and expands pair repairs', () => {
   assert.equal(repairPlan([{episode:3,severity:'P1',scope:'pair'}], 5).episodes.join(','), '3,4');
   assert.equal(repairPlan([{episode:3,severity:'P0',scope:'local'}], 5).action, 'blocked');

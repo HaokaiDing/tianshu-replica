@@ -2,7 +2,7 @@
 
 ## 1. 决策摘要
 
-TianshuAgent 保留旧天书的短剧方法、两阶段人工审核、固定 11 列分镜合同和确定性质量门。模型侧改用 Pi Coding Agent SDK + `kimi-coding/k3-256k`，不再维护旧的直接 LLM 调用和多节点调度。
+TianshuAgent 保留旧天书的短剧方法、两阶段人工审核、固定 7 列分镜合同和确定性质量门。模型侧改用 Pi Coding Agent SDK + `kimi-coding/k3-256k`，不再维护旧的直接 LLM 调用和多节点调度。
 
 这里不做通用多 Agent 平台。Agent 在明确的内容合同、项目资料和提交工具里写作、审稿、修复。用户最后只拿到 Markdown 和 DOCX 分镜剧本。
 
@@ -10,7 +10,7 @@ TianshuAgent 保留旧天书的短剧方法、两阶段人工审核、固定 11 
 
 - 生产默认模型：`kimi-coding/k3-256k`。`kimi-coding/k3` 只作为人工批准后的长上下文升级选项。
 - 阶段 A：一句话创意/三幕 → 设计发散 → 分集大纲 → 人物圣经 → 人工审核。
-- 阶段 B：剧本完成并通过全剧审稿后，才生成固定 11 列分镜。
+- 阶段 B：剧本完成并通过全剧审稿后，才生成固定 7 列分镜。
 - 剧本与分镜：**每 5 集 = 1 个持续 Pi Session**，第 6 集起创建新 session；不跨角色复用 session。
 - 生产 session 使用 `SessionManager.inMemory()`；session 历史是批内创作辅助，不是项目事实来源。
 - 项目事实以版本化纯文件 artifacts、台账和连续性快照为准。
@@ -27,7 +27,7 @@ TianshuAgent 保留旧天书的短剧方法、两阶段人工审核、固定 11 
 | 两阶段人工审核 | 保留 | 阶段 A 是全剧地基，不应由自动化绕过 |
 | `calibers.js` 的单一数值口径 | 迁移为 `contracts/calibers.ts` | 消除 Prompt、工具、检查器间的数字漂移 |
 | 文件落盘、断点续跑、残桩检测 | 保留并强化 revision/digest | 可审计、可恢复、无需数据库 |
-| 11 列分镜合同 | 严格保留 | 是目标交付物合同 |
+| 7 列分镜合同 | 严格保留 | 是目标交付物合同 |
 | 直接 OpenAI 兼容节点池、流式续写、节点健康路由 | 替换为 Pi SDK session/runtime | Pi 负责模型会话与工具调用；无需复刻旧网络调度层 |
 | HTML 看板、飞书写回、HTML 对外交付 | 不进入 V1 | 最终需求只保留 Markdown 与 DOCX |
 | 旧式批量 LLM 调用 | 替换为短生命周期 Agent session + `submit_*` 工具 | 将自检与定向修复放入受控 Agent 回合 |
@@ -51,7 +51,7 @@ flowchart TD
     SeriesReview -->|"系统性问题"| Human
     SeriesReview -->|"通过"| Board["单集 Storyboard Agent\n1 episode = 1 short session"]
     Board --> BoardTool["submit_storyboard"]
-    BoardTool --> Storyboards["固定 11 列分镜"]
+    BoardTool --> Storyboards["固定 7 列分镜"]
     Storyboards --> FinalReview["最终审查"]
     FinalReview --> Delivery["Markdown canonical source\n原生 Word 表格 DOCX"]
 
@@ -98,7 +98,7 @@ Planner 必须随规划包提交 `market`：国家、主要故事地点、人物
 |---|---|---|
 | `canonical/` | 三幕、设计、大纲、人物、台账 | 按需只读 |
 | `screenplay/` | 已批准单集剧本 | 按需只读 |
-| `storyboard/` | 已批准单集 11 列分镜 | 按需只读 |
+| `storyboard/` | 已批准单集 7 列分镜 | 按需只读 |
 | `continuity/` | 每集真实末态、钩子、持物与已知信息 | 按需只读 |
 | `reviews/` | Window/全剧审稿与 Repair Plan | 按需只读 |
 | `research/` | 有来源、适用范围和 digest 的外部研究笔记 | 按需只读；Planner 可提交新增笔记 |
@@ -153,7 +153,7 @@ contextDigest
 | `submit_research_note` | Planner；Repair Plan 明确授权的 Writer | 将来源、摘要、适用范围提交到 `research/` |
 | `submit_planning_bundle` | Planner | 原子提交三幕、设计、大纲、人物、台账 |
 | `submit_screenplay` | Writer | 原子提交当前集剧本与 continuity snapshot |
-| `submit_storyboard` | Storyboard Agent | 原子提交当前集固定 11 列分镜 |
+| `submit_storyboard` | Storyboard Agent | 原子提交当前集固定 7 列分镜 |
 | `submit_review` | Reviewer | 提交结构化审稿报告；不能直接改稿 |
 
 不开放任意路径 `bash`、直接写 `runs/` canonical artifacts、裸 HTTP 请求或任意浏览器控制。开发模式可用单独的 feature flag 开诊断工具；生产研究必须走 `research_web`，这样来源、抓取范围和外部提示都能管住。
@@ -206,7 +206,7 @@ ep01–epN 剧本（连续 5 集一批，批间顺序）
 
 - 规划包齐全、目标集数合法、集数覆盖完整；
 - 剧本集号、双语格式、钩子、连续性字段、残桩、人物数等；
-- 分镜固定 11 列、列顺序、镜号、镜数、建议时长、累计时长、总时长、日夜与关键单元格；
+- 分镜固定 7 列、列顺序、镜号、镜数、建议时长、总时长、日夜与关键单元格；
 - 台账 token 不漂移、依赖 revision 未过期；
 - Markdown 与 DOCX 使用同一 revision。
 
@@ -228,7 +228,7 @@ Repair Plan 为每个 Writer 编译最小修复包：修复范围、原始证据
 
 Markdown 是唯一内容源。assemble 按集号拼接已通过检查的 `storyboard/ep-N.md`；不使用 LLM 改写或重排。
 
-DOCX 渲染器必须生成原生 OOXML Word 表格：横向页面、11 列、重复表头、固定列宽、多行台词/画面段落和中英字体。不得使用将 Markdown 当作普通文本转换的 `textutil` 方案作为正式渲染器。
+DOCX 渲染器必须生成原生 OOXML Word 表格：横向页面、7 列、重复表头、固定列宽、多行台词/画面段落和中英字体。不得使用将 Markdown 当作普通文本转换的 `textutil` 方案作为正式渲染器。
 
 内部 `delivery.json` 记录源分镜 digest、Markdown digest、DOCX 来源 digest 与合同版本；用户只收到 Markdown 和 DOCX。
 
@@ -261,7 +261,7 @@ draft → planning → awaiting_approval → approved
 
 ## 10. Session Topology 实验结论
 
-在 `kimi-coding/k3-256k`、同一 5 集 fixture、同一 11 列合同下：
+在 `kimi-coding/k3-256k`、同一 5 集 fixture、同一 7 列合同下：
 
 | 指标 | 持久 session | 无持续 session |
 |---|---:|---:|
@@ -295,7 +295,7 @@ draft → planning → awaiting_approval → approved
 
 ### M3：分镜与交付
 
-- 实现 11 列 Storyboard Agent、分镜硬门、原生 DOCX 表格渲染、Markdown/DOCX delivery gate。
+- 实现 7 列 Storyboard Agent、分镜硬门、原生 DOCX 表格渲染、Markdown/DOCX delivery gate。
 
 ### M4：生产验证
 

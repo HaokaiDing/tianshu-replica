@@ -1,6 +1,6 @@
 # TianshuAgent
 
-TianshuAgent 用 Pi Coding Agent SDK 把短剧创意推进到固定 11 列分镜剧本。
+TianshuAgent 用 Pi Coding Agent SDK 把短剧创意推进到固定 7 列分镜剧本（ReelClaw 格式）。
 
 它保留旧天书的内容方法和人工审核门，把模型调用换成受约束的 Agent：Agent 可以按需读取项目资料、在任务工作区修改草稿、做有限研究和自检；正式产物只能通过校验工具提交。
 

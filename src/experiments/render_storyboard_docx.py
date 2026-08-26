@@ -87,8 +87,8 @@ def parse_markdown(markdown: str):
 
 
 def add_storyboard(doc, heading, header, rows):
-    if len(header) != 11 or any(len(row) != 11 for row in rows):
-        raise ValueError("expected a strict 11-column storyboard table")
+    if len(header) != 7 or any(len(row) != 7 for row in rows):
+        raise ValueError("expected a strict 7-column storyboard table")
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = title.add_run(heading)
@@ -97,10 +97,10 @@ def add_storyboard(doc, heading, header, rows):
     run._element.rPr.rFonts.set(qn("w:eastAsia"), "Droid Sans Fallback")
     run.font.size = Pt(13)
     title.paragraph_format.space_after = Pt(5)
-    table = doc.add_table(rows=1, cols=11)
+    table = doc.add_table(rows=1, cols=7)
     table.style = "Table Grid"
     table.autofit = False
-    widths = [0.30, 0.55, 1.25, 1.55, 0.95, 0.80, 1.05, 1.25, 0.75, 0.50, 0.50]
+    widths = [0.50, 2.20, 2.40, 1.50, 1.60, 1.60, 0.65]
     header_row = table.rows[0]
     repeat_header(header_row)
     for index, value in enumerate(header):
@@ -118,12 +118,12 @@ def add_storyboard(doc, heading, header, rows):
             set_width(cell, widths[index])
             set_cell_margins(cell)
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-            put_text(cell, value, size=6.5, center=index in (0, 9, 10))
+            put_text(cell, value, size=6.5, center=index in (0, 6))
 def main(input_path: Path, output_path: Path):
     chunks = [chunk for chunk in input_path.read_text(encoding="utf-8").split("\n---\n") if chunk.strip()]
     parsed = [parse_markdown(chunk) for chunk in chunks]
-    if any(len(header) != 11 or any(len(row) != 11 for row in rows) for _, header, rows in parsed):
-        raise ValueError("expected a strict 11-column storyboard table")
+    if any(len(header) != 7 or any(len(row) != 7 for row in rows) for _, header, rows in parsed):
+        raise ValueError("expected a strict 7-column storyboard table")
     doc = Document()
     section = doc.sections[0]
     section.orientation = WD_ORIENT.LANDSCAPE
