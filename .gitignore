@@ -1,4 +1,5 @@
 node_modules/
+.DS_Store
 /experiments/
 /runs/
 __pycache__/
