@@ -11,6 +11,9 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 
+BODY_FONT = "Noto Sans CJK SC"
+
+
 def cells(line: str):
     return [item.strip() for item in line.strip().split("|")[1:-1]]
 
@@ -70,8 +73,8 @@ def put_text(cell, text, *, bold=False, size=6.5, color=None, center=False):
         paragraph.paragraph_format.space_before = Pt(0)
         run = paragraph.add_run(part)
         run.bold = bold
-        run.font.name = "Droid Sans Fallback"
-        run._element.rPr.rFonts.set(qn("w:eastAsia"), "Droid Sans Fallback")
+        run.font.name = BODY_FONT
+        run._element.rPr.rFonts.set(qn("w:eastAsia"), BODY_FONT)
         run.font.size = Pt(size)
         if color:
             run.font.color.rgb = RGBColor(*color)
@@ -86,15 +89,16 @@ def parse_markdown(markdown: str):
     return heading, header, rows
 
 
-def add_storyboard(doc, heading, header, rows):
+def add_storyboard(doc, heading, header, rows, *, page_break_before=False):
     if len(header) != 7 or any(len(row) != 7 for row in rows):
         raise ValueError("expected a strict 7-column storyboard table")
     title = doc.add_paragraph()
+    title.paragraph_format.page_break_before = page_break_before
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = title.add_run(heading)
     run.bold = True
-    run.font.name = "Droid Sans Fallback"
-    run._element.rPr.rFonts.set(qn("w:eastAsia"), "Droid Sans Fallback")
+    run.font.name = BODY_FONT
+    run._element.rPr.rFonts.set(qn("w:eastAsia"), BODY_FONT)
     run.font.size = Pt(13)
     title.paragraph_format.space_after = Pt(5)
     table = doc.add_table(rows=1, cols=7)
@@ -133,9 +137,7 @@ def main(input_path: Path, output_path: Path):
     section.left_margin = Inches(0.22)
     section.right_margin = Inches(0.22)
     for index, (heading, header, rows) in enumerate(parsed):
-        if index:
-            doc.add_page_break()
-        add_storyboard(doc, heading, header, rows)
+        add_storyboard(doc, heading, header, rows, page_break_before=index > 0)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(output_path)
 

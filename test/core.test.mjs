@@ -5,8 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { STORYBOARD_HEADER, checkStoryboard, createRun, loadManifest, markdownDelivery, storyboardWarnings, writeText } from "../src/core.mjs";
 import { markStale, repairPlan } from "../src/review.mjs";
-import { applyRepair } from "../src/agents.mjs";
+import { applyRepair, planningWatchdogMs, screenplayChecks } from "../src/agents.mjs";
 import { inferMarketIntent, marketChecks, validateMarketSubmission } from "../src/market.mjs";
+import { canonicalPersonNames } from "../src/entities.mjs";
 
 function board(ep=1) {
   const rows=[];
@@ -57,4 +58,32 @@ test('planner market submission must match the requested country', () => {
   const valid={country:'United States',setting:'New York contemporary auction world',characterNaming:'Natural contemporary American names',socialContext:'US family wealth and auction institutions',culturalAnchors:['New York','estate sale']};
   assert.deepEqual(validateMarketSubmission(market, valid), []);
   assert.ok(validateMarketSubmission(market, {...valid,country:'China'}).length);
+});
+test('screenplay contract rejects dialogue that cannot fit a 120-second episode', () => {
+  const words=Array.from({length:261},()=> 'word').join(' ');
+  const screenplay=`# 第1集｜EP01\n\n## 场景一\n\n（EN）${words}\n\n${'剧情动作。'.repeat(180)}\n\n## 【本集钩子】\n局面改变。\n\n## 【连续性检查】\n状态已记录。`;
+  assert.ok(screenplayChecks(screenplay,1,{anchors:[],bannedContext:[]}).some((error)=>error.includes('英文对白过长')));
+});
+test('screenplay duration counts inline English markers after Chinese dialogue', () => {
+  const words=Array.from({length:261},()=> 'word').join(' ');
+  const screenplay=`# 第1集｜EP01\n\n## 场景一\n\n（中）台词。 (EN) ${words}\n\n${'剧情动作。'.repeat(180)}\n\n## 【本集钩子】\n局面改变。\n\n## 【连续性检查】\n状态已记录。`;
+  assert.ok(screenplayChecks(screenplay,1,{anchors:[],bannedContext:[]}).some((error)=>error.includes('英文对白过长')));
+});
+test('screenplay contract accepts full-width punctuation in paired EN markers', () => {
+  const screenplay=`# 第1集｜EP01\n\n## 场景一\n\nMAYA（中）：成交。\nMAYA（EN）：Deal.\n\n${'剧情动作。'.repeat(180)}\n\n## 【本集钩子】\n局面改变。\n\n## 【连续性检查】\n状态已记录。`;
+  assert.ok(!screenplayChecks(screenplay,1,{anchors:[],bannedContext:[]}).some((error)=>error.includes('缺少英文台词')));
+});
+test('fixed-entity contract rejects a known first name with a drifting surname', () => {
+  const drifted=board().replace('画面 1','Rowan Hale 走进房间');
+  assert.ok(checkStoryboard(drifted,['Rowan Kade']).some((error)=>error.includes('Rowan Hale')));
+  assert.ok(screenplayChecks(`# 第1集｜EP01\n\n## 场景一\n\nRowan Hale 出场。\nMAYA（中）：成交。\nMAYA（EN）：Deal.\n\n${'剧情动作。'.repeat(180)}\n\n## 【本集钩子】\n局面改变。\n\n## 【连续性检查】\n状态已记录。`,1,{anchors:[],bannedContext:[]},['Rowan Kade']).some((error)=>error.includes('Rowan Hale')));
+  assert.ok(!screenplayChecks(`# 第1集｜EP01\n\n## 场景一\n\nRowan Kade's coat is wet.\nMAYA（中）：成交。\nMAYA（EN）：Deal.\n\n${'剧情动作。'.repeat(180)}\n\n## 【本集钩子】\n局面改变。\n\n## 【连续性检查】\n状态已记录。`,1,{anchors:[],bannedContext:[]},['Rowan Kade']).some((error)=>error.includes('姓名漂移')));
+  assert.ok(!screenplayChecks(`# 第1集｜EP01\n\n## 场景一\n\nVale Family Voting Trust.\nMAYA（中）：成交。\nMAYA（EN）：Deal.\n\n${'剧情动作。'.repeat(180)}\n\n## 【本集钩子】\n局面改变。\n\n## 【连续性检查】\n状态已记录。`,1,{anchors:[],bannedContext:[]},['Vale Row']).some((error)=>error.includes('姓名漂移')));
+});
+test('fixed-entity contract derives people from the character bible, not team or company names', () => {
+  assert.deepEqual(canonicalPersonNames('Tessa Ward (31): analyst. Fixed entities: Windsor Foundry.', ['Tessa Ward','Windsor Foundry']),['Tessa Ward']);
+});
+test('60-episode planning gets a longer watchdog without changing 30-episode production', () => {
+  assert.equal(planningWatchdogMs(30),180_000);
+  assert.equal(planningWatchdogMs(60),600_000);
 });

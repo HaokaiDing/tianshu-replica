@@ -2,11 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { Type, createPiExperimentSession, defineTool, promptWithWatchdog, readText, sha, writeJson, writeText } from "./experiments/lib.mjs";
 import { STORYBOARD_HEADER, checkStoryboard, loadManifest, saveManifest, storyboardWarnings, taskPath } from "./core.mjs";
+import { screenplayBilingualErrors } from "./bilingual.mjs";
+import { canonicalPersonNames, fixedEntityErrors } from "./entities.mjs";
+import { continuityContext, continuityIsAccepted, extractContinuityUpdate, reviewContinuityUpdate, stageContinuityProposal } from "./continuity.mjs";
 import { markStale, repairPlan } from "./review.mjs";
 import { inferMarketIntent, marketChecks, marketContractMarkdown, validateMarketSubmission } from "./market.mjs";
 
 const ep = (n) => String(n).padStart(2, "0");
 const batches = (total) => Array.from({length:Math.ceil(total/5)},(_,i)=>({from:i*5+1,to:Math.min(total,i*5+5)}));
+export const planningWatchdogMs = (episodes) => Number(episodes) === 60 ? 600_000 : 180_000;
 function outlineWindow(outline, episode, total) {
   const parts = outline.split(/(?=^## 第\d+集)/m);
   const wanted = new Set([episode - 1, episode, episode + 1].filter((n) => n >= 1 && n <= total));
@@ -37,34 +41,134 @@ function shortcutChecks(markdown) {
   if (/(?:DNA|基因鉴定)/i.test(markdown)) failures.push('禁止使用 DNA 作为翻盘手段');
   return failures;
 }
-function screenplayChecks(markdown, episode, market) {
+export function screenplayChecks(markdown, episode, market, canonicalNames = []) {
   const failures=[];
   if (markdown.length < 700) failures.push('剧本过短');
+  const lines = markdown.split('\n');
+  const englishSegments=[];
+  for(let index=0;index<lines.length;index++){
+    const marker=lines[index].match(/(?:（EN）|\(EN\)|EN\s*[:：])/);
+    if(!marker)continue;
+    let value=lines[index].slice((marker.index||0)+marker[0].length).trim();
+    if(!value&&index+1<lines.length)value=lines[index+1].trim();
+    englishSegments.push(value);
+  }
+  const englishDialogue = englishSegments.join(' ').trim();
+  const englishDialogueWords = englishDialogue ? englishDialogue.split(/\s+/).filter(Boolean).length : 0;
+  if (englishDialogueWords > 260) failures.push(`英文对白过长 ${englishDialogueWords} 词（上限 260）`);
+  const sceneCount = (markdown.match(/^##\s*场景/gm) || []).length;
+  if (sceneCount > 4) failures.push(`场景过多 ${sceneCount}（上限 4）`);
   if (!/【本集钩子】/.test(markdown)) failures.push('缺少【本集钩子】');
   if (!/【连续性检查】/.test(markdown)) failures.push('缺少【连续性检查】');
-  if (!/(?:EN|英)\s*[:：]|^[A-Za-z][A-Za-z .'-]{1,40}[:：]|\/\s*[A-Za-z][A-Za-z .,'"'!?—-]{4,}/m.test(markdown)) failures.push('缺少英文台词');
+  if (!/(?:（EN）|\(EN\)|(?:EN|英)\s*[:：])|^[A-Za-z][A-Za-z .'-]{1,40}[:：]|\/\s*[A-Za-z][A-Za-z .,'"'!?—-]{4,}/m.test(markdown)) failures.push('缺少英文台词');
   if (!new RegExp(`(?:第?${episode}集|EP(?:ISODE)?\\s*${episode})`, 'i').test(markdown)) failures.push('缺少本集标识');
-  return [...failures, ...marketChecks(markdown, market), ...shortcutChecks(markdown)];
+  return [...failures, ...screenplayBilingualErrors(markdown), ...fixedEntityErrors(markdown, canonicalNames), ...marketChecks(markdown, market), ...shortcutChecks(markdown)];
 }
 export async function plan(runDir) {
   const m=loadManifest(runDir), input=readText(path.join(runDir,"canonical","input.md")), intent=inferMarketIntent(input); let accepted=false;
-  const submit=defineTool({name:"submit_planning_bundle",label:"Submit planning",description:"Submit a complete planning bundle with an explicit target-market contract and exactly the requested number of numbered episode outlines.",parameters:Type.Object({market:Type.Object({country:Type.String(),setting:Type.String({minLength:20}),characterNaming:Type.String({minLength:20}),socialContext:Type.String({minLength:20}),culturalAnchors:Type.Array(Type.String({minLength:2}),{minItems:2})}),acts:Type.String({minLength:100}),design:Type.String({minLength:100}),characters:Type.String({minLength:100}),ledger:Type.Object({names:Type.Array(Type.String(),{minItems:2}),facts:Type.Array(Type.String(),{minItems:3})}),outline:Type.Array(Type.String({minLength:40}),{minItems:m.episodes,maxItems:m.episodes})}),async execute(_id,p){const errors=validateMarketSubmission(intent,p.market);if(errors.length)return {content:[{type:'text',text:`REJECTED ${errors.join('；')}`}],details:{errors},terminate:false};const contract={...intent,...p.market};writeJson(path.join(runDir,"canonical","market.json"),contract);writeText(path.join(runDir,"canonical","market-contract.md"),marketContractMarkdown(contract));writeText(path.join(runDir,"canonical","acts.md"),p.acts);writeText(path.join(runDir,"canonical","design.md"),p.design);writeText(path.join(runDir,"canonical","characters.md"),p.characters);writeJson(path.join(runDir,"canonical","ledger.json"),p.ledger);writeText(path.join(runDir,"canonical","outline.md"),p.outline.map((x,i)=>`## 第${i+1}集\n${x}`).join("\n\n"));accepted=true;return {content:[{type:"text",text:"ACCEPTED planning and market contract"}],details:{},terminate:true};}});
-  const {session,metrics}=await createPiExperimentSession({runDir,role:"planner",systemPrompt:`You are Tianshu Planner. Create a strong ${m.episodes}-episode vertical-drama plan from the brief. Use one emotion engine, concrete hooks, active heroine, no police/court/DNA/surveillance shortcuts. The target market is a hard creative constraint: set every character name, city, institution, family structure, money/legal context, props and cultural reference in that country. Do not use Chinese names or Chinese social settings for a US story merely because the production language is Chinese. Submit only through the tool.`,customTools:[submit],toolNames:["submit_planning_bundle"]});
-  try{await promptWithWatchdog(session,metrics,`Brief:\n${input}\n\nNon-negotiable market intent:\n${marketContractMarkdown(intent)}`);if(!accepted)throw new Error("planner did not submit");m.state="awaiting_approval";m.planMetrics=metrics;saveManifest(runDir,m);return metrics;}finally{session.dispose();}
+  const submit=defineTool({
+    name:"submit_planning_bundle",
+    label:"Submit planning",
+    description:"Submit a complete planning bundle, natural-language continuity baseline, target-market contract, and exact episode outline.",
+    parameters:Type.Object({
+      market:Type.Object({country:Type.String(),setting:Type.String({minLength:20}),characterNaming:Type.String({minLength:20}),socialContext:Type.String({minLength:20}),culturalAnchors:Type.Array(Type.String({minLength:2}),{minItems:2})}),
+      acts:Type.String({minLength:100}),
+      design:Type.String({minLength:100}),
+      characters:Type.String({minLength:100}),
+      ledger:Type.Object({names:Type.Array(Type.String(),{minItems:2}),facts:Type.Array(Type.String(),{minItems:3})}),
+      continuityContract:Type.String({minLength:200}),
+      outline:Type.Array(Type.String({minLength:40}),{minItems:m.episodes,maxItems:m.episodes}),
+    }),
+    async execute(_id,p){
+      const errors=validateMarketSubmission(intent,p.market);
+      if(errors.length)return {content:[{type:'text',text:`REJECTED ${errors.join('；')}`}],details:{errors},terminate:false};
+      const contract={...intent,...p.market};
+      writeJson(path.join(runDir,"canonical","market.json"),contract);
+      writeText(path.join(runDir,"canonical","market-contract.md"),marketContractMarkdown(contract));
+      writeText(path.join(runDir,"canonical","acts.md"),p.acts);
+      writeText(path.join(runDir,"canonical","design.md"),p.design);
+      writeText(path.join(runDir,"canonical","characters.md"),p.characters);
+      writeJson(path.join(runDir,"canonical","ledger.json"),p.ledger);
+      writeText(path.join(runDir,"canonical","continuity-contract.md"),p.continuityContract);
+      writeText(path.join(runDir,"canonical","outline.md"),p.outline.map((x,i)=>`## 第${i+1}集\n${x}`).join("\n\n"));
+      accepted=true;
+      return {content:[{type:"text",text:"ACCEPTED planning, continuity, and market contracts"}],details:{},terminate:true};
+    }
+  });
+  const {session,metrics}=await createPiExperimentSession({runDir,role:"planner",systemPrompt:`You are Tianshu Planner. Create a strong ${m.episodes}-episode vertical-drama plan from the brief. Use one emotion engine, concrete hooks, active heroine, no police/court/DNA/surveillance shortcuts. The target market is a hard creative constraint: set every character name, city, institution, family structure, money/legal context, props and cultural reference in that country. Do not use Chinese names or Chinese social settings for a US story merely because the production language is Chinese. Also write a natural-language continuity baseline: immutable identities and world rules, opening custody/debt/knowledge states, and any hard future rails. Do not pretend later episode changes have already happened; those are maintained by the Continuity Agent. Submit only through the tool.`,customTools:[submit],toolNames:["submit_planning_bundle"]});
+  try{await promptWithWatchdog(session,metrics,`Brief:\n${input}\n\nNon-negotiable market intent:\n${marketContractMarkdown(intent)}`,planningWatchdogMs(m.episodes));if(!accepted)throw new Error("planner did not submit");m.state="awaiting_approval";m.planMetrics=metrics;saveManifest(runDir,m);return metrics;}finally{session.dispose();}
 }
 export async function produceScripts(runDir) {
-  const m=loadManifest(runDir);if(!["approved","screenplay_producing"].includes(m.state))throw new Error(`produce requires approved or screenplay_producing, got ${m.state}`);const outline=readText(path.join(runDir,"canonical","outline.md")),chars=readText(path.join(runDir,"canonical","characters.md")),ledger=readText(path.join(runDir,"canonical","ledger.json")),market=JSON.parse(readText(path.join(runDir,"canonical","market.json"))),marketContract=readText(path.join(runDir,"canonical","market-contract.md"));m.state="screenplay_producing";saveManifest(runDir,m);
-  for(const b of batches(m.episodes)){let active={episode:b.from};const workDir=path.join(runDir,'work',`writer-${b.from}-${b.to}`);let lastChecks=[];
-    const runChecks=defineTool({name:'run_checks',label:'Check screenplay',description:'Validate the draft for the current episode before submission, including the target-market contract.',parameters:Type.Object({}),async execute(){const draft=path.join(workDir,'draft.md');if(!fs.existsSync(draft))lastChecks=['尚未写入草稿'];else lastChecks=screenplayChecks(readText(draft),active.episode,market);return {content:[{type:'text',text:lastChecks.length?`FAIL: ${lastChecks.join('；')}`:'PASS: draft is eligible for submission'}],details:{failures:lastChecks},terminate:false};}});
-    const submit=defineTool({name:"submit_screenplay",label:"Submit screenplay",description:"Submit the checked draft for the current episode. The tool reads the saved draft; never paste a screenplay into this call.",parameters:Type.Object({episode:Type.Integer()}),async execute(_id,p){if(p.episode!==active.episode)return {content:[{type:"text",text:"REJECTED wrong episode"}],details:{},terminate:false};const draft=path.join(workDir,'draft.md');if(!fs.existsSync(draft))return {content:[{type:'text',text:'REJECTED no draft'}],details:{},terminate:false};const markdown=readText(draft), errors=screenplayChecks(markdown,p.episode,market);if(errors.length)return {content:[{type:'text',text:`REJECTED ${errors.join('；')}`}],details:{errors},terminate:false};writeText(path.join(runDir,"screenplay",`ep-${ep(p.episode)}.md`),markdown);writeJson(path.join(runDir,"continuity",`ep-${ep(p.episode)}.json`),{episode:p.episode,digest:sha(markdown),hook:markdown.match(/【本集钩子】[^\n]*/)?.[0]||""});writeJson(taskPath(runDir,`screenplay-ep-${ep(p.episode)}`),{state:"passed",digest:sha(markdown)});return {content:[{type:"text",text:"ACCEPTED screenplay"}],details:{},terminate:true};}});
+  const m=loadManifest(runDir);
+  if(!["approved","screenplay_producing"].includes(m.state))throw new Error(`produce requires approved or screenplay_producing, got ${m.state}`);
+  const outline=readText(path.join(runDir,"canonical","outline.md"));
+  const chars=readText(path.join(runDir,"canonical","characters.md"));
+  const ledger=readText(path.join(runDir,"canonical","ledger.json"));
+  const ledgerNames=canonicalPersonNames(chars,JSON.parse(ledger).names||[]);
+  const market=JSON.parse(readText(path.join(runDir,"canonical","market.json")));
+  const marketContract=readText(path.join(runDir,"canonical","market-contract.md"));
+  m.state="screenplay_producing";saveManifest(runDir,m);
+  for(const b of batches(m.episodes)){
+    let active={episode:b.from};
+    const workDir=path.join(runDir,'work',`writer-${b.from}-${b.to}`);
+    let lastChecks=[];
+    const runChecks=defineTool({name:'run_checks',label:'Check screenplay',description:'Validate the draft for the current episode before submission, including the target-market contract.',parameters:Type.Object({}),async execute(){const draft=path.join(workDir,'draft.md');if(!fs.existsSync(draft))lastChecks=['尚未写入草稿'];else lastChecks=screenplayChecks(readText(draft),active.episode,market,ledgerNames);return {content:[{type:'text',text:lastChecks.length?`FAIL: ${lastChecks.join('；')}`:'PASS: draft is eligible for submission'}],details:{failures:lastChecks},terminate:false};}});
+    const submit=defineTool({
+      name:"submit_screenplay",
+      label:"Submit screenplay",
+      description:"Submit the checked draft plus a natural-language continuity update. The tool reads the saved draft; never paste a screenplay into this call.",
+      parameters:Type.Object({episode:Type.Integer(),continuityUpdate:Type.String({minLength:8})}),
+      async execute(_id,p){
+        if(p.episode!==active.episode)return {content:[{type:"text",text:"REJECTED wrong episode"}],details:{},terminate:false};
+        const draft=path.join(workDir,'draft.md');
+        if(!fs.existsSync(draft))return {content:[{type:'text',text:'REJECTED no draft'}],details:{},terminate:false};
+        const markdown=readText(draft), errors=screenplayChecks(markdown,p.episode,market,ledgerNames);
+        if(errors.length)return {content:[{type:'text',text:`REJECTED ${errors.join('；')}`}],details:{errors},terminate:false};
+        writeText(path.join(runDir,"screenplay",`ep-${ep(p.episode)}.md`),markdown);
+        stageContinuityProposal(runDir,{episode:p.episode,screenplay:markdown,proposedUpdate:p.continuityUpdate});
+        writeJson(taskPath(runDir,`screenplay-ep-${ep(p.episode)}`),{state:"passed",digest:sha(markdown)});
+        return {content:[{type:"text",text:"ACCEPTED screenplay; continuity proposal staged for independent review"}],details:{},terminate:true};
+      }
+    });
     const tools=artifactTools(runDir,workDir), role=`writer-${b.from}-${b.to}`;
-    const {session,metrics}=await createPiExperimentSession({runDir,role,systemPrompt:"你是天书剧本作者，一次只做指定的一集。每次任务必须严格走三步：1) 用 write_draft 写完整剧本；2) 调用 run_checks；3) 仅在收到 PASS 后调用 submit_screenplay 并传当前集数。submit 会读取草稿，绝不把剧本粘进 submit 参数。不要输出解释、不要停在半成品。你可在资料不够时使用 read_artifact。剧本须有中英双语对白、【本集钩子】和【连续性检查】。冲突必须产生后果：每场冲突戏结束后，要有人的处境、关系或信息差发生不可逆的变化，不能只当推动剧情的跳板。市场合同是硬约束：人物、空间、制度、道具和文化必须符合目标国家；不能因制作语言为中文而沿用中国姓名或社会语境。",customTools:[...tools,runChecks,submit],toolNames:["read_artifact","write_draft","run_checks","submit_screenplay"]});
-    let outcome='completed'; try{for(let n=b.from;n<=b.to;n++){const task=taskPath(runDir,`screenplay-ep-${ep(n)}`);const artifact=path.join(runDir,"screenplay",`ep-${ep(n)}.md`);const prior=fs.existsSync(task)?JSON.parse(readText(task)):null;if(prior?.state==='passed'&&fs.existsSync(artifact))continue;active.episode=n;lastChecks=[];const prev=n>1&&fs.existsSync(path.join(runDir,"continuity",`ep-${ep(n-1)}.json`))?readText(path.join(runDir,"continuity",`ep-${ep(n-1)}.json`)):"start";const nearby=[n-1,n+1].filter(x=>x>=1&&x<=m.episodes).map(x=>{const f=path.join(runDir,'screenplay',`ep-${ep(x)}.md`);return fs.existsSync(f)?`第${x}集：\n${readText(f).slice(0,14000)}`:'';}).filter(Boolean).join('\n\n');const contractPath=path.join(runDir,'canonical','continuity-contract.md');const contract=fs.existsSync(contractPath)?readText(contractPath).slice(0,16000):'';const repair=prior?.repairInstruction?`\n这是修订任务。保留下面现有剧本的有效内容，只修复列出的缺陷。\n现有剧本：\n${fs.existsSync(artifact)?readText(artifact).slice(0,30000):''}\n修订要求：\n${prior.repairInstruction}`:"";const taskPrompt=`只写第 ${n} 集，并按 write_draft → run_checks → submit_screenplay 的顺序调用工具。\n市场与文化合同（对新写和修订均强制生效）：\n${marketContract}\n\n硬连续性合同（对新写和修订均强制生效）：\n${contract}\n\n本集及相邻集大纲：\n${outlineWindow(outline,n,m.episodes)}\n人物：${chars.slice(0,12000)}\n台账：${ledger.slice(0,8000)}\n上一集连续性：${prev}\n相邻集上下文：\n${nearby}${repair}`;await promptWithWatchdog(session,metrics,taskPrompt,1800000);if(!fs.existsSync(artifact))await promptWithWatchdog(session,metrics,`上一回合没有生成第 ${n} 集正式文件。现在只做这三步：write_draft 写完整第 ${n} 集；run_checks；submit_screenplay({episode:${n}})。不要解释，不要开始别集。`,120000);if(!fs.existsSync(artifact))throw new Error(`writer did not submit episode ${n}`);}}catch(error){outcome='failed';writeBatchMetrics(runDir,role,metrics,outcome,{error:error.message});throw error;}finally{session.dispose();}writeBatchMetrics(runDir,role,metrics,outcome);}
+    const {session,metrics}=await createPiExperimentSession({runDir,role,systemPrompt:"你是天书剧本作者，一次只做指定的一集。每次任务必须严格走三步：1) 用 write_draft 写完整剧本；2) 调用 run_checks；3) 仅在收到 PASS 后调用 submit_screenplay，提交当前集数和本集自然语言 continuityUpdate。continuityUpdate 只写本集真正发生的状态变化，包括客观事实、人物认知、证物/债务/羁押/关系状态和未解决钩子；没有重要变化时明确写“无重要连续性变化”。你不能直接修改连续性合同，独立 Continuity Agent 会复核。submit 会读取草稿，绝不把剧本粘进参数。不要输出解释、不要停在半成品。每集成片目标 60–120 秒，最多 4 个场景；英文对白不超过 260 词。每句对白必须连续写成角色（中）和角色（EN）两行。剧本必须有【本集钩子】和【连续性检查】。冲突必须产生后果。市场合同与连续性合同都是硬约束。",customTools:[...tools,runChecks,submit],toolNames:["read_artifact","write_draft","run_checks","submit_screenplay"]});
+    let outcome='completed';
+    try{
+      for(let n=b.from;n<=b.to;n++){
+        const task=taskPath(runDir,`screenplay-ep-${ep(n)}`);
+        const artifact=path.join(runDir,"screenplay",`ep-${ep(n)}.md`);
+        const prior=fs.existsSync(task)?JSON.parse(readText(task)):null;
+        if(prior?.state==='passed'&&fs.existsSync(artifact)){
+          const screenplay=readText(artifact);
+          if(continuityIsAccepted(runDir,n,sha(screenplay)))continue;
+          const recordPath=path.join(runDir,"continuity",`ep-${ep(n)}.json`);
+          const proposed=fs.existsSync(recordPath)?JSON.parse(readText(recordPath)).proposedUpdate:extractContinuityUpdate(screenplay);
+          if(!proposed)throw new Error(`episode ${n} is missing a continuity proposal`);
+          await reviewContinuityUpdate(runDir,{episode:n,screenplay,proposedUpdate:proposed});
+          continue;
+        }
+        active.episode=n;lastChecks=[];
+        const continuity=continuityContext(runDir);
+        const nearby=[n-1,n+1].filter(x=>x>=1&&x<=m.episodes).map(x=>{const f=path.join(runDir,'screenplay',`ep-${ep(x)}.md`);return fs.existsSync(f)?`第${x}集：\n${readText(f).slice(0,14000)}`:'';}).filter(Boolean).join('\n\n');
+        const repair=prior?.repairInstruction?`\n这是修订任务。保留下面现有剧本的有效内容，只修复列出的缺陷。\n现有剧本：\n${fs.existsSync(artifact)?readText(artifact).slice(0,30000):''}\n修订要求：\n${prior.repairInstruction}`:"";
+        const taskPrompt=`只写第 ${n} 集，并按 write_draft → run_checks → submit_screenplay 的顺序调用工具。\n市场与文化合同：\n${marketContract}\n\n静态连续性合同：\n${continuity.contract.slice(0,18000)}\n\n截至上一集的动态连续性快照：\n${continuity.current.snapshot.slice(0,12000)}\n\n本集及相邻集大纲：\n${outlineWindow(outline,n,m.episodes)}\n人物：${chars.slice(0,12000)}\n初始台账：${ledger.slice(0,8000)}\n相邻集上下文：\n${nearby}${repair}`;
+        await promptWithWatchdog(session,metrics,taskPrompt,1800000);
+        if(!fs.existsSync(artifact))await promptWithWatchdog(session,metrics,`上一回合没有生成第 ${n} 集正式文件。现在只做三步：write_draft；run_checks；submit_screenplay，同时提交 continuityUpdate。不要解释，不要开始别集。`,120000);
+        if(!fs.existsSync(artifact))throw new Error(`writer did not submit episode ${n}`);
+        const screenplay=readText(artifact);
+        const recordPath=path.join(runDir,"continuity",`ep-${ep(n)}.json`);
+        const proposed=fs.existsSync(recordPath)?JSON.parse(readText(recordPath)).proposedUpdate:extractContinuityUpdate(screenplay);
+        if(!proposed)throw new Error(`writer did not submit continuity for episode ${n}`);
+        await reviewContinuityUpdate(runDir,{episode:n,screenplay,proposedUpdate:proposed});
+      }
+    }catch(error){outcome='failed';writeBatchMetrics(runDir,role,metrics,outcome,{error:error.message});throw error;}finally{session.dispose();}
+    writeBatchMetrics(runDir,role,metrics,outcome);
+  }
   m.state="screenplay_review";saveManifest(runDir,m);
 }
 export async function produceStoryboards(runDir) {
-  const m=loadManifest(runDir);if(!["screenplay_review","storyboard_producing"].includes(m.state))throw new Error(`storyboard requires screenplay_review, got ${m.state}`);const market=JSON.parse(readText(path.join(runDir,"canonical","market.json"))),marketContract=readText(path.join(runDir,"canonical","market-contract.md"));m.state="storyboard_producing";saveManifest(runDir,m);
-  for(const b of batches(m.episodes)){let active={episode:b.from};const workDir=path.join(runDir,'work',`storyboard-${b.from}-${b.to}`);const runChecks=defineTool({name:'run_checks',label:'Check storyboard',description:'Validate the saved draft for the current episode before submission, including the target-market contract.',parameters:Type.Object({}),async execute(){const draft=path.join(workDir,'draft.md'),errors=fs.existsSync(draft)?[...checkStoryboard(readText(draft)),...marketChecks(readText(draft),market),...shortcutChecks(readText(draft))]:['尚未写入草稿'];const warnings=fs.existsSync(draft)?storyboardWarnings(readText(draft)):[];const warn=warnings.length?`\nWARN(不阻断，但提交前应尽量修正): ${warnings.join('；')}`:'';return {content:[{type:'text',text:(errors.length?`FAIL: ${errors.join('；')}`:'PASS: storyboard is eligible for submission')+warn}],details:{errors,warnings},terminate:false};}});const submit=defineTool({name:"submit_storyboard",label:"Submit storyboard",description:"Submit the checked saved draft. The tool reads the saved draft; never paste a storyboard into this call.",parameters:Type.Object({episode:Type.Integer()}),async execute(_id,p){const draft=path.join(workDir,'draft.md');const errors=p.episode===active.episode&&fs.existsSync(draft)?[...checkStoryboard(readText(draft)),...marketChecks(readText(draft),market),...shortcutChecks(readText(draft))]:['wrong episode or missing draft'];if(errors.length)return {content:[{type:"text",text:`REJECTED ${errors.join("; ")}`}],details:{errors},terminate:false};const markdown=readText(draft);writeText(path.join(runDir,"storyboard",`ep-${ep(p.episode)}.md`),markdown);writeJson(taskPath(runDir,`storyboard-ep-${ep(p.episode)}`),{state:"passed",digest:sha(markdown)});return {content:[{type:"text",text:"ACCEPTED storyboard"}],details:{},terminate:true};}});
+  const m=loadManifest(runDir);if(!["screenplay_review","storyboard_producing"].includes(m.state))throw new Error(`storyboard requires screenplay_review, got ${m.state}`);const market=JSON.parse(readText(path.join(runDir,"canonical","market.json"))),marketContract=readText(path.join(runDir,"canonical","market-contract.md")),characters=readText(path.join(runDir,"canonical","characters.md")),ledgerNames=canonicalPersonNames(characters,JSON.parse(readText(path.join(runDir,"canonical","ledger.json"))).names||[]);m.state="storyboard_producing";saveManifest(runDir,m);
+  for(const b of batches(m.episodes)){let active={episode:b.from};const workDir=path.join(runDir,'work',`storyboard-${b.from}-${b.to}`);const runChecks=defineTool({name:'run_checks',label:'Check storyboard',description:'Validate the saved draft for the current episode before submission, including the target-market contract.',parameters:Type.Object({}),async execute(){const draft=path.join(workDir,'draft.md'),errors=fs.existsSync(draft)?[...checkStoryboard(readText(draft),ledgerNames),...marketChecks(readText(draft),market),...shortcutChecks(readText(draft))]:['尚未写入草稿'];const warnings=fs.existsSync(draft)?storyboardWarnings(readText(draft)):[];const warn=warnings.length?`\nWARN(不阻断，但提交前应尽量修正): ${warnings.join('；')}`:'';return {content:[{type:'text',text:(errors.length?`FAIL: ${errors.join('；')}`:'PASS: storyboard is eligible for submission')+warn}],details:{errors,warnings},terminate:false};}});const submit=defineTool({name:"submit_storyboard",label:"Submit storyboard",description:"Submit the checked saved draft. The tool reads the saved draft; never paste a storyboard into this call.",parameters:Type.Object({episode:Type.Integer()}),async execute(_id,p){const draft=path.join(workDir,'draft.md');const errors=p.episode===active.episode&&fs.existsSync(draft)?[...checkStoryboard(readText(draft),ledgerNames),...marketChecks(readText(draft),market),...shortcutChecks(readText(draft))]:['wrong episode or missing draft'];if(errors.length)return {content:[{type:"text",text:`REJECTED ${errors.join("; ")}`}],details:{errors},terminate:false};const markdown=readText(draft);writeText(path.join(runDir,"storyboard",`ep-${ep(p.episode)}.md`),markdown);writeJson(taskPath(runDir,`storyboard-ep-${ep(p.episode)}`),{state:"passed",digest:sha(markdown)});return {content:[{type:"text",text:"ACCEPTED storyboard"}],details:{},terminate:true};}});
     const tools=artifactTools(runDir,workDir), role=`storyboard-${b.from}-${b.to}`;
     const {session,metrics}=await createPiExperimentSession({runDir,role,systemPrompt:`你是天书分镜导演。每次任务必须严格走三步：1) 用 write_draft 写完整分镜；2) 调用 run_checks；3) 只有 PASS 后调用 submit_storyboard 并传当前集数。submit 会读取草稿，绝不把分镜粘进 submit 参数。不要输出解释。表头必须是：| ${STORYBOARD_HEADER.join(" | ")} |。镜头号格式为 epNN-sNN（两位集号+两位镜号）。单元格内换行用 <br>：台词格写"角色：中文台词<br>EN: English line<br>表演：……"（无台词写"无台词"）；运镜格写"运镜 / 景别<br>走位：……"；人物图/场景图格写"人物：……<br>场景：……<br>道具：……"；备注格写"音效：……<br>功能：一个叙事功能标签（如 建立/反应/情绪停留/对峙/揭示/钩子定格）<br>连续性：与上一镜的衔接关系<br>制作：……"。每集 12-24 镜、单镜 3-10 秒、总时长 60-120 秒（各镜时长之和）。
 节奏与衔接原则：
