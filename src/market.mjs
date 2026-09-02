@@ -68,3 +68,13 @@ export function marketChecks(text, market) {
   for (const token of market?.bannedContext || []) if (value.includes(token)) failures.push(`contains foreign-market carryover: ${token}`);
   return [...new Set(failures)];
 }
+
+export function marketArtifactDigest(runDir) {
+  const jsonFile = path.join(runDir, "canonical", "market.json");
+  const markdownFile = path.join(runDir, "canonical", "market-contract.md");
+  if (!fs.existsSync(jsonFile) || !fs.existsSync(markdownFile)) throw new Error("market contract artifacts are incomplete");
+  return crypto.createHash("sha256").update(`${fs.readFileSync(jsonFile, "utf8")}\n${fs.readFileSync(markdownFile, "utf8")}`).digest("hex");
+}
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";

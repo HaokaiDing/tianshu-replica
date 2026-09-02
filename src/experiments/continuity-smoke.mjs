@@ -40,7 +40,7 @@ try {
   saveManifest(runDir, manifest);
 
   await produceScripts(runDir);
-  assert.equal(loadManifest(runDir).state, "screenplay_review");
+  assert.equal(loadManifest(runDir).state, "screenplay_reviewing");
   const first = readJson(path.join(runDir, "continuity", "ep-01.json"));
   const second = readJson(path.join(runDir, "continuity", "ep-02.json"));
   const current = readJson(path.join(runDir, "continuity", "current.json"));

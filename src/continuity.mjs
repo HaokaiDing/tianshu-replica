@@ -4,6 +4,11 @@ import { Type, createPiExperimentSession, defineTool, promptWithWatchdog } from 
 import { readJson, readText, sha, writeJson, writeText } from "./core.mjs";
 
 const ep = (episode) => String(episode).padStart(2, "0");
+const OPENING_SNAPSHOT = "尚无已发生的动态变化；以静态连续性合同为开篇状态。";
+
+export function openingContinuityState() {
+  return { lastEpisode: 0, snapshot: OPENING_SNAPSHOT, snapshotDigest: sha(OPENING_SNAPSHOT) };
+}
 
 function currentPath(runDir) {
   return path.join(runDir, "continuity", "current.json");
@@ -63,7 +68,7 @@ export function continuityContext(runDir) {
   const contract = contractText(runDir);
   const current = fs.existsSync(currentPath(runDir))
     ? readJson(currentPath(runDir))
-    : { lastEpisode: 0, snapshot: "尚无已发生的动态变化；以静态连续性合同为开篇状态。", snapshotDigest: sha("尚无已发生的动态变化；以静态连续性合同为开篇状态。") };
+    : openingContinuityState();
   return { contract, contractDigest: sha(contract), current };
 }
 
@@ -72,6 +77,61 @@ export function continuityIsAccepted(runDir, episode, screenplayDigest) {
   if (!fs.existsSync(file)) return false;
   const record = readJson(file);
   return record.status === "accepted" && record.screenplayDigest === screenplayDigest;
+}
+
+function snapshotFromAcceptedEpisode(runDir, episode) {
+  if (episode === 0) {
+    return openingContinuityState();
+  }
+  const recordFile = episodePath(runDir, episode);
+  if (!fs.existsSync(recordFile)) throw new Error(`cannot rewind continuity: episode ${episode} is unavailable`);
+  const record = readJson(recordFile);
+  if (record.status !== "accepted" || !record.event) throw new Error(`cannot rewind continuity: episode ${episode} is not accepted`);
+  const eventFile = path.join(runDir, record.event);
+  if (!fs.existsSync(eventFile)) throw new Error(`cannot rewind continuity: missing source event for episode ${episode}`);
+  const event = readJson(eventFile);
+  if (!event.currentSnapshot || sha(event.currentSnapshot) !== record.snapshotDigest) {
+    throw new Error(`cannot rewind continuity: snapshot digest mismatch at episode ${episode}`);
+  }
+  return {
+    lastEpisode: episode,
+    snapshot: event.currentSnapshot,
+    snapshotDigest: record.snapshotDigest,
+    sourceEvent: record.event,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function invalidateContinuityFrom(runDir, fromEpisode, totalEpisodes, reason = "upstream screenplay repair") {
+  const from = Number(fromEpisode);
+  const total = Number(totalEpisodes);
+  if (!Number.isInteger(from) || from < 1 || !Number.isInteger(total) || from > total) {
+    throw new Error("invalid continuity invalidation range");
+  }
+  const archiveDir = path.join(runDir, "continuity", "stale", `${Date.now()}-from-ep-${ep(from)}`);
+  fs.mkdirSync(archiveDir, { recursive: true });
+  const invalidated = [];
+  for (let episode = from; episode <= total; episode++) {
+    const file = episodePath(runDir, episode);
+    if (!fs.existsSync(file)) continue;
+    const record = readJson(file);
+    writeJson(path.join(archiveDir, path.basename(file)), {
+      ...record,
+      staleAt: new Date().toISOString(),
+      staleReason: reason,
+    });
+    fs.unlinkSync(file);
+    invalidated.push(episode);
+  }
+  const restored = snapshotFromAcceptedEpisode(runDir, from - 1);
+  writeJson(currentPath(runDir), restored);
+  writeText(
+    path.join(runDir, "continuity", "current.md"),
+    restored.lastEpisode
+      ? `# 截至第 ${restored.lastEpisode} 集的动态连续性快照\n\n${restored.snapshot}`
+      : `# 开篇动态连续性快照\n\n${restored.snapshot}`,
+  );
+  return { fromEpisode: from, restoredThrough: from - 1, invalidated, archiveDir: path.relative(runDir, archiveDir) };
 }
 
 export function stageContinuityProposal(runDir, { episode, screenplay, proposedUpdate }) {
@@ -175,7 +235,12 @@ export async function reviewContinuityUpdate(runDir, { episode, screenplay, prop
     await promptWithWatchdog(session, metrics, `静态连续性合同：\n${context.contract.slice(0, 18000)}\n\n上一集动态快照：\n${context.current.snapshot.slice(0, 12000)}\n\nWriter 提交的本集变化：\n${proposedUpdate}\n\n第 ${episode} 集正式剧本：\n${screenplay.slice(0, 32000)}`, 240_000);
     if (!submitted) throw new Error("continuity agent did not submit a review");
     const result = commitContinuityReview(runDir, { episode, screenplay, proposedUpdate, review: submitted });
-    if (!result.accepted) throw new Error(`continuity rejected episode ${episode}: ${submitted.reason}`);
+    if (!result.accepted) {
+      const error = new Error(`continuity rejected episode ${episode}: ${submitted.reason}`);
+      error.code = "CONTINUITY_REJECTED";
+      error.review = submitted;
+      throw error;
+    }
     appendMetrics(runDir, role, metrics, outcome, { verdict: submitted.verdict, event: path.relative(runDir, result.eventFile) });
     return result;
   } catch (error) {

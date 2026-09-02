@@ -2,9 +2,11 @@
 
 ## 1. 决策摘要
 
-TianshuAgent 保留旧天书的短剧方法、两阶段人工审核、固定 7 列分镜合同和确定性质量门。模型侧改用 Pi Coding Agent SDK + `kimi-coding/k3-256k`，不再维护旧的直接 LLM 调用和多节点调度。
+TianshuAgent 保留旧天书的短剧方法、最终大纲人工批准门、固定 7 列分镜合同和确定性质量门。模型侧使用 Pi Coding Agent SDK + `kimi-coding/k3-256k`。
 
 这里不做通用多 Agent 平台。Agent 在明确的内容合同、项目资料和提交工具里写作、审稿、修复。用户最后只拿到 Markdown 和 DOCX 分镜剧本。
+
+外部 Orchestrator 可以是任意 Coding Agent。它只准备 brief 和生产合同、调用 CLI、监控状态和验收结果；正式规划、剧本、分镜及其修订只能由 TianshuAgent 内部 Agent 通过 `submit_*` 工具提交。用户在规划通过独立审稿后批准一次，后续由 `tianshu run` 自动生产，除非任务进入 `needs_human_review`。
 
 ### 已确认的设计
 
@@ -15,6 +17,8 @@ TianshuAgent 保留旧天书的短剧方法、两阶段人工审核、固定 7 �
 - 生产 session 使用 `SessionManager.inMemory()`；session 历史是批内创作辅助，不是项目事实来源。
 - 项目事实以版本化纯文件 artifacts、台账和连续性快照为准。
 - 目标市场也是 canonical contract：目标国家决定人物命名、城市、机构、家庭/金钱制度、道具、服装与文化锚点；制作语言不能覆盖这个约束。
+- 新 run 使用版本化 `production-contract.json`。默认 profile 是女频竖屏短剧、每集 90–100 秒、EP1–3 前三秒冷开并具备可剪宣发桥段；合同可在 `init --contract` 时替换。
+- 规划、剧本和分镜都走独立 Reviewer、Repair Plan 和最多 3 轮的有限复审。P0/P1 必须清零，P2 必须修复或明确接受为非阻断问题。
 - 不建设数据库、服务端、MCP、看板、飞书交付或通用多 Agent 平台。
 - 对外交付仅为 `<剧名>｜分镜剧本.md` 与 `<剧名>｜分镜剧本.docx`。
 
@@ -36,11 +40,15 @@ TianshuAgent 保留旧天书的短剧方法、两阶段人工审核、固定 7 �
 
 ```mermaid
 flowchart TD
-    Input["创意 / 三幕 / 已审核大纲"] --> Runtime["Tianshu Runtime\nTypeScript CLI"]
+    User["用户 / 出品人"] --> Orchestrator["外部 Coding Agent\n合同编译、调度、验收"]
+    Orchestrator --> Input["brief + production contract"]
+    Input --> Runtime["Tianshu Runtime\nTypeScript CLI"]
     Runtime --> Planner["阶段 A 规划 Agent\nPi + k3-256k"]
     Planner --> PlanTool["submit_planning_bundle"]
     PlanTool --> PlanArtifacts["三幕 / 设计 / 大纲 / 人物 / 台账"]
-    PlanArtifacts --> Human{"人工审核门"}
+    PlanArtifacts --> PlanReview["独立规划 Reviewer"]
+    PlanReview -->|"需修"| Planner
+    PlanReview --> Human{"用户批准最终大纲"}
     Human -->|"打回"| Planner
     Human -->|"通过"| Writer["单集 Writer\n1 episode = 1 short session"]
     Writer --> ScriptTool["submit_screenplay"]
@@ -52,7 +60,9 @@ flowchart TD
     SeriesReview -->|"通过"| Board["单集 Storyboard Agent\n1 episode = 1 short session"]
     Board --> BoardTool["submit_storyboard"]
     BoardTool --> Storyboards["固定 7 列分镜"]
-    Storyboards --> FinalReview["最终审查"]
+    Storyboards --> BoardReview["窗口 + 全剧分镜 Reviewer"]
+    BoardReview -->|"局部修复"| Board
+    BoardReview --> FinalReview["delivery gate"]
     FinalReview --> Delivery["Markdown canonical source\n原生 Word 表格 DOCX"]
 
     Runtime <--> Facts["runs/<run-id>/\nmanifest + ledger + artifacts + revisions"]
@@ -67,6 +77,7 @@ runs/<run-id>/
 ├── manifest.json
 ├── events.jsonl
 ├── canonical/
+│   ├── production-contract.json
 │   ├── market.json
 │   ├── market-contract.md
 │   ├── acts.md
@@ -85,6 +96,8 @@ runs/<run-id>/
 ```
 
 `canonical/`、`screenplay/`、`storyboard/`、`continuity/`、`reviews/` 和已批准的 `research/` 是只读 canonical artifacts；`work/<task-id>/` 是当前 Agent 唯一可编辑的 scratch workspace。`manifest.json` 是全剧状态；`tasks/*.json` 是每个可恢复单元的状态。Agent session 文件、日志、目录 mtime 均不是项目事实。
+
+`production-contract.json` 绑定成片时长、镜数、场景数、英文对白预算、宣发集、语义修订轮次、系统性问题阈值、P2 处置和自动交付策略。task、review 和 delivery 都记录合同摘要；合同或市场 artifacts 改变后，旧摘要不能继续使用。
 
 ### 4.1.1 市场与文化合同
 
@@ -179,7 +192,8 @@ Runtime 直接提供基线上下文，不要求 Agent 每次先调 `get_context`
 ### 阶段 A：规划与人工审核
 
 ```text
-输入 → Planner → submit_planning_bundle → 硬检查 → awaiting_approval
+输入 → Planner → submit_planning_bundle → 独立规划审稿
+→ Planner Repair → 复审通过 → awaiting_approval
 ```
 
 人工审核可选择 `approved` 或 `returned`。只有 `approved` 才能进入阶段 B。
@@ -190,10 +204,11 @@ Runtime 直接提供基线上下文，不要求 Agent 每次先调 `get_context`
 ep01–epN 剧本（连续 5 集一批，批间顺序）
 → 剧本硬检查
 → 窗口审稿 + 全剧审稿
-→ 已批准的局部修复
+→ Repair Plan → Writer 局部修复 → 连续性回退/重放 → 复审
 → ep01–epN 分镜（连续 5 集一批，批间顺序）
-→ 分镜硬检查 + 最终审查
-→ 交付
+→ 分镜硬检查 + 窗口审稿 + 全剧审稿
+→ Repair Plan → Storyboard Agent 局部修复 → 复审
+→ delivery gate → 交付
 ```
 
 分镜必须等待剧本全剧审稿结束；不得先拆分镜、再回头大修剧本。
@@ -219,14 +234,17 @@ Repair Plan 为每个 Writer 编译最小修复包：修复范围、原始证据
 | 结果 | 动作 |
 |---|---|
 | 硬门失败 | 当前 Agent 定向重提一次 |
-| `P2` / `minor` | 记录，不自动大修 |
-| 1–2 个 `P1` | 执行 Repair Plan，复审受影响窗口 |
+| `P2` / `minor` | 修复，或由全剧 Reviewer 给出 `accepted_non_blocking` 理由 |
+| 局部或相邻集 `P1` | 执行 Repair Plan，复审受影响窗口，再做全剧终审 |
 | 任一 `P0` | 阻止后续阶段或交付 |
-| 同类 `P1` 覆盖至少 3 集 | 视为上游问题，停止逐集补丁并升级人工审核 |
+| 同类问题覆盖合同规定的系统性阈值 | 停止逐集补丁并进入 `needs_human_review` |
+| 相同 finding 修订后仍存在，或轮次用尽 | 进入 `needs_human_review`，不得无限重试或假 PASS |
+
+剧本第 `n` 集改变时，Runtime 把连续性回退到第 `n-1` 集的已接受快照，归档第 `n...N` 集旧记录，再顺序复核后续剧本。第 `n...N` 集分镜、后续终审证明和 delivery readiness 同时失效。Continuity Agent 如果拒绝某集，会形成有证据和验收条件的 Writer repair task；同一集最多自动处理两次。
 
 ## 8. 交付
 
-Markdown 是唯一内容源。assemble 按集号拼接已通过检查的 `storyboard/ep-N.md`；不使用 LLM 改写或重排。
+Markdown 是唯一内容源。assemble 按集号拼接已通过检查的 `storyboard/ep-N.md`；不使用 LLM 改写或重排。交付门重新验证 task state、文件和输入摘要、市场与生产合同、完整连续性摘要链、源剧本依赖，以及 planning/screenplay/storyboard 三份与当前 artifacts 绑定的终审 PASS 证明。
 
 DOCX 渲染器必须生成原生 OOXML Word 表格：横向页面、7 列、重复表头、固定列宽、多行台词/画面段落和中英字体。不得使用将 Markdown 当作普通文本转换的 `textutil` 方案作为正式渲染器。
 
@@ -235,29 +253,31 @@ DOCX 渲染器必须生成原生 OOXML Word 表格：横向页面、7 列、重�
 ## 9. CLI、状态与恢复
 
 ```bash
-tianshu plan <input>
-tianshu status <run-id> [--json]
+tianshu init <input> --title "剧名" [--contract production-contract.json]
+tianshu plan <run-id>
+tianshu status <run-id>
 tianshu approve <run-id>
-tianshu return <run-id> --note "..."
-tianshu produce <run-id>
-tianshu review <run-id>
-tianshu repair <run-id>
-tianshu deliver <run-id>
+tianshu run <run-id>
 tianshu resume <run-id>
+tianshu deliver <run-id>
+tianshu lock-status <run-id>
+tianshu unlock-stale <run-id>
 ```
 
 状态机：
 
 ```text
 draft → planning → awaiting_approval → approved
-→ screenplay_producing → screenplay_review
-→ storyboard_producing → final_review
-→ ready_to_deliver → delivered
+→ screenplay_producing → screenplay_reviewing
+→ screenplay_repairing ↺ → screenplay_passed
+→ storyboard_producing → storyboard_reviewing
+→ storyboard_repairing ↺ → final_review
+→ awaiting_delivery_approval | ready_to_deliver → delivered
 ```
 
-异常状态：`returned`、`repair_required`、`blocked`、`failed`、`cancelled`。
+异常状态：`returned`、`needs_human_review`、`blocked`、`failed`。
 
-`resume` 只跳过同时满足“artifact 存在、digest 正确、context 未 stale、硬门通过”的任务。单集修复会使其分镜与下游依赖集变 stale，不会无差别重跑整部剧。每个 run 以 `.lock` 防止双写。
+`resume` 只跳过同时满足“artifact 存在、digest 正确、生产与市场合同一致、上游摘要一致、continuity 已接受”的任务。每个 run 以 `.lock` 防止双写；自动生产、fresh delivery gate、Markdown/DOCX 渲染和 `delivered` 状态写入处于同一把锁内。进程被强杀留下的旧锁只能通过显式 `unlock-stale` 清理，Runtime 会核对锁龄和 PID。
 
 ## 10. Session Topology 实验结论
 
@@ -305,4 +325,4 @@ draft → planning → awaiting_approval → approved
 
 ## 12. 当前边界
 
-本文件是已批准的实施蓝图，不代表已经开始生产系统重构。现有仓库仅包含临时 Pi SDK session topology 实验 harness；后续实现、提交、推送和发布均需用户明确指令。
+正式路径已经实现生产合同、规划审稿、剧本和分镜双阶段语义修订、连续性回退与重放、run 级锁和交付门。实验 harness 仍用于模型与 session topology 对比，不作为正式生产事实。系统性内容问题、需要改变已批准大纲或合同的问题，以及修订预算用尽仍会停在 `needs_human_review`；外部 Orchestrator 只能处理升级或请求用户决策，不能直接手改正式内容绕过状态机。
