@@ -1,6 +1,15 @@
 node_modules/
+.venv/
+.pi-company/
 .DS_Store
 /experiments/
 /runs/
 __pycache__/
 *.pyc
+
+# Local source material and credentials
+fixtures/replication-real/
+inputs/
+.env
+.env.*
+!.env.example

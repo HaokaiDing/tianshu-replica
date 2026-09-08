@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { collectUsage } from "../metrics.mjs";
 import {
   createAgentSession,
   defineTool,
@@ -12,7 +14,7 @@ import {
 const require = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
 export const { Type } = require("typebox");
 
-export const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const EXPERIMENT_ROOT = path.join(ROOT, "experiments", "core");
 
 export function sha(value) {
@@ -87,7 +89,7 @@ export async function createPiExperimentSession({ runDir, role, systemPrompt, cu
   const modelRuntime = await ModelRuntime.create();
   const model = modelRuntime.getModel("kimi-coding", "k3-256k");
   if (!model) throw new Error("Pi cannot resolve kimi-coding/k3-256k");
-  const metrics = { role, prompts: 0, turns: 0, toolCalls: 0, compactions: 0, usage: [], events: [], modelErrors: [] };
+  const metrics = { role, startedAt: new Date().toISOString(), endedAt: null, prompts: 0, turns: 0, toolCalls: 0, compactions: 0, assistantMessages: 0, usage: [], events: [], modelErrors: [] };
   const { session } = await createAgentSession({
     cwd: ROOT,
     modelRuntime,
@@ -99,16 +101,13 @@ export async function createPiExperimentSession({ runDir, role, systemPrompt, cu
   });
   sessionPrefixes.set(session, systemPrompt);
   session.subscribe((event) => {
+    collectUsage(metrics, event);
     if (event.type === "turn_end") metrics.turns += 1;
     if (event.type === "tool_execution_start") {
       metrics.toolCalls += 1;
       metrics.events.push({ type: "tool_start", tool: event.toolName, at: Date.now() });
     }
     if (event.type === "compaction_end") metrics.compactions += 1;
-    if (event.type === "message_end" && event.message?.role === "assistant" && event.message?.usage) {
-      const u = event.message.usage;
-      metrics.usage.push({ input: u.input ?? null, output: u.output ?? null, cacheRead: u.cacheRead ?? null, cacheWrite: u.cacheWrite ?? null, totalTokens: u.totalTokens ?? null });
-    }
     if (event.type === "message_end" && event.message?.role === "assistant" && event.message?.stopReason === "error") {
       metrics.modelErrors.push({ at: Date.now(), stopReason: "error" });
     }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { dialogueCellErrors } from "./bilingual.mjs";
 import { canonicalPersonNames, fixedEntityErrors } from "./entities.mjs";
 import { createProductionContract, loadProductionContract, productionContractDigest, writeProductionContract } from "./production-contract.mjs";
+import { parseSourceOutline } from "./replication.mjs";
 
 export const STORYBOARD_HEADER = ["镜头号", "画面描述", "中英双语台词", "运镜方式/景别", "人物图/场景图", "备注（音效）", "建议时长（s）"];
 export const STATES = new Set(["draft", "planning", "awaiting_approval", "approved", "screenplay_producing", "screenplay_reviewing", "screenplay_repairing", "screenplay_passed", "storyboard_producing", "storyboard_reviewing", "storyboard_repairing", "final_review", "awaiting_delivery_approval", "ready_to_deliver", "delivered", "returned", "needs_human_review", "blocked", "failed"]);
@@ -17,14 +18,17 @@ export function manifestPath(runDir) { return path.join(runDir, "manifest.json")
 export function taskPath(runDir, id) { return path.join(runDir, "tasks", `${id}.json`); }
 export function loadManifest(runDir) { return readJson(manifestPath(runDir)); }
 export function saveManifest(runDir, manifest) { manifest.updatedAt = new Date().toISOString(); writeJson(manifestPath(runDir), manifest); }
-export function createRun(root, { title, episodes = 30, input, productionContract = createProductionContract() }) {
+export function createRun(root, { title, episodes = 30, input, sourceOutline, productionContract = createProductionContract() }) {
   if (![30,60].includes(Number(episodes))) throw new Error("episodes must be 30 or 60");
+  if (sourceOutline !== undefined) parseSourceOutline(sourceOutline, Number(episodes));
   const slug = String(title || "untitled").replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/g, "").slice(0,50) || "untitled";
   const id = `${slug}-${Date.now().toString(36)}`;
   const dir = path.join(runRoot(root), id);
   for (const sub of ["canonical","screenplay","storyboard","continuity","reviews","research","work","tasks","metrics","deliverables"]) fs.mkdirSync(path.join(dir, sub), {recursive:true});
-  const manifest = { id, title: title || "Untitled", episodes: Number(episodes), state:"draft", revision:1, inputDigest:sha(input), createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
-  saveManifest(dir, manifest); writeText(path.join(dir,"canonical","input.md"), input); writeProductionContract(dir, productionContract); return {id,dir,manifest};
+  const manifest = { id, title: title || "Untitled", episodes: Number(episodes), productionRoute: sourceOutline === undefined ? "tianshu-original" : "tianshu-replication", state:"draft", revision:1, inputDigest:sha(input), createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
+  saveManifest(dir, manifest); writeText(path.join(dir,"canonical","input.md"), input);
+  if (sourceOutline !== undefined) writeText(path.join(dir,"canonical","source-outline.md"), sourceOutline);
+  writeProductionContract(dir, productionContract); return {id,dir,manifest};
 }
 export function transition(runDir, next, note="") { const m=loadManifest(runDir); if (!STATES.has(next)) throw new Error(`unknown state ${next}`); m.state=next; if(note) m.note=note; saveManifest(runDir,m); return m; }
 export function cells(line) { return line.trim().split("|").slice(1,-1).map((x)=>x.trim()); }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Type, createPiExperimentSession, defineTool, promptWithWatchdog } from "./experiments/lib.mjs";
 import { readJson, readText, sha, writeJson, writeText } from "./core.mjs";
+import { appendRunMetrics } from "./metrics.mjs";
 
 const ep = (episode) => String(episode).padStart(2, "0");
 const OPENING_SNAPSHOT = "尚无已发生的动态变化；以静态连续性合同为开篇状态。";
@@ -34,23 +35,7 @@ function contractText(runDir) {
   return fallback;
 }
 
-function usageTotal(metrics) {
-  return metrics.usage.reduce((sum, item) => ({
-    input: sum.input + (item.input || 0),
-    output: sum.output + (item.output || 0),
-    cacheRead: sum.cacheRead + (item.cacheRead || 0),
-    cacheWrite: sum.cacheWrite + (item.cacheWrite || 0),
-    totalTokens: sum.totalTokens + (item.totalTokens || 0),
-  }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 });
-}
-
-function appendMetrics(runDir, role, metrics, outcome, extra = {}) {
-  const file = path.join(runDir, "metrics", `${role}.json`);
-  const record = { role, outcome, endedAt: new Date().toISOString(), ...metrics, usageTotal: usageTotal(metrics), ...extra };
-  const previous = fs.existsSync(file) ? readJson(file) : null;
-  const attempts = previous?.attempts || (previous ? [{ ...previous, attempts: undefined }] : []);
-  writeJson(file, { ...record, attempts: [...attempts, record] });
-}
+const appendMetrics = appendRunMetrics;
 
 function nextAttemptPath(runDir, episode) {
   const dir = eventDir(runDir, episode);

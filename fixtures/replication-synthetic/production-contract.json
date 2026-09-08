@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "1.0.0",
+  "contractVersion": "synthetic-outline-fixture@1",
+  "profile": "synthetic-outline-offline-fixture",
+  "legacy": false,
+  "format": {
+    "audience": "unspecified",
+    "orientation": "vertical",
+    "form": "short-drama"
+  },
+  "screenplay": {
+    "episodeDurationSeconds": {
+      "min": 50,
+      "max": 75
+    },
+    "maxScenes": 4,
+    "englishDialogueWordLimit": 260
+  },
+  "storyboard": {
+    "episodeDurationSeconds": {
+      "min": 50,
+      "max": 75
+    },
+    "shotCount": {
+      "min": 12,
+      "max": 24
+    },
+    "shotDurationSeconds": {
+      "min": 3,
+      "max": 10
+    }
+  },
+  "promotion": {
+    "requiredEpisodes": [
+      1,
+      2,
+      3
+    ],
+    "coldOpenWithinSeconds": 3,
+    "requireSemanticHook": true,
+    "requirePromotionalClip": true
+  },
+  "revision": {
+    "maxSemanticRounds": {
+      "planning": 3,
+      "screenplay": 3,
+      "storyboard": 3
+    },
+    "systemicEpisodeThreshold": 3,
+    "maxContinuityRepairAttempts": 2,
+    "requireP2Disposition": true
+  },
+  "delivery": {
+    "autoDeliver": false
+  }
+}

@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { applyRepair, produceScripts, produceStoryboards, reviewScripts, reviewStoryboards, screenplayChecks, shortcutChecks } from "./agents.mjs";
+import { applyRepair, produceScripts, produceStoryboards, reviewScripts, reviewStoryboards, screenplayChecks, storyboardChecks } from "./agents.mjs";
 import { continuityIsAccepted, openingContinuityState } from "./continuity.mjs";
 import { loadManifest, markdownDelivery, readJson, readText, saveManifest, sha, taskPath, writeJson } from "./core.mjs";
 import { canonicalPersonNames } from "./entities.mjs";
-import { marketArtifactDigest, marketChecks } from "./market.mjs";
+import { marketArtifactDigest } from "./market.mjs";
 import { loadProductionContract, productionContractDigest } from "./production-contract.mjs";
 import { stageArtifactDigest } from "./semantic-review.mjs";
 
@@ -97,12 +97,12 @@ export function deliveryGate(runDir) {
     const screenplayTask = readJson(taskPath(runDir, `screenplay-ep-${ep(episode)}`));
     if (screenplayTask.state !== "passed" || screenplayTask.digest !== sha(screenplay)) throw new Error(`screenplay task ${episode} is stale or mismatched`);
     if (screenplayTask.contractDigest !== contractDigest || screenplayTask.marketDigest !== marketDigest) throw new Error(`screenplay task ${episode} input contract mismatch`);
-    const screenplayErrors = [...screenplayChecks(screenplay, episode, market, names, contract), ...shortcutChecks(screenplay)];
+    const screenplayErrors = screenplayChecks(screenplay, episode, market, names, contract, manifest.productionRoute);
     if (screenplayErrors.length) throw new Error(`screenplay ${episode}: ${[...new Set(screenplayErrors)].join("; ")}`);
     const storyboardTask = readJson(taskPath(runDir, `storyboard-ep-${ep(episode)}`));
     if (storyboardTask.state !== "passed" || storyboardTask.digest !== sha(storyboard)) throw new Error(`storyboard task ${episode} is stale or mismatched`);
     if (storyboardTask.contractDigest !== contractDigest || storyboardTask.marketDigest !== marketDigest || storyboardTask.sourceScreenplayDigest !== sha(screenplay)) throw new Error(`storyboard task ${episode} input contract mismatch`);
-    const marketErrors = [...marketChecks(storyboard, market), ...shortcutChecks(storyboard)];
+    const marketErrors = storyboardChecks(storyboard, market, names, contract, manifest.productionRoute);
     if (marketErrors.length) throw new Error(`storyboard ${episode}: ${[...new Set(marketErrors)].join("; ")}`);
     screenplayDigests.push(sha(screenplay));storyboardDigests.push(sha(storyboard));
   }

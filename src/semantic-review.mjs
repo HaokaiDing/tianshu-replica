@@ -5,6 +5,8 @@ import { loadManifest, readJson, readText, sha, writeJson } from "./core.mjs";
 import { loadProductionContract, productionContractDigest, productionContractMarkdown } from "./production-contract.mjs";
 import { semanticRepairPlan } from "./review.mjs";
 import { marketArtifactDigest } from "./market.mjs";
+import { appendRunMetrics } from "./metrics.mjs";
+import { replicationReviewContext } from "./replication.mjs";
 
 const ep = (value) => String(value).padStart(2, "0");
 
@@ -33,20 +35,16 @@ export function assertReviewerSubmitted(submitted, label) {
   if (!submitted) throw new Error(`${label} did not submit`);
 }
 
-function appendMetrics(runDir, role, metrics, outcome, extra = {}) {
-  const file = path.join(runDir, "metrics", `${role}.json`);
-  const record = { role, outcome, endedAt: new Date().toISOString(), ...metrics, ...extra };
-  const previous = fs.existsSync(file) ? readJson(file) : null;
-  const attempts = previous?.attempts || (previous ? [{ ...previous, attempts: undefined }] : []);
-  writeJson(file, { ...record, attempts: [...attempts, record] });
-}
+const appendMetrics = appendRunMetrics;
 
-function planningPayload(runDir) {
-  return ["acts.md", "design.md", "outline.md", "characters.md", "ledger.json", "continuity-contract.md", "market.json", "market-contract.md"]
+export function planningPayload(runDir) {
+  const planning = ["acts.md", "design.md", "outline.md", "characters.md", "ledger.json", "continuity-contract.md", "market.json", "market-contract.md"]
     .map((name) => {
       const file = path.join(runDir, "canonical", name);
       return fs.existsSync(file) ? `## ${name}\n${readText(file)}` : `## ${name}\n[MISSING]`;
     }).join("\n\n");
+  const sourceContext = replicationReviewContext(runDir);
+  return sourceContext ? `${planning}\n\n${sourceContext}` : planning;
 }
 
 function canonicalReviewContext(runDir) {
@@ -82,7 +80,7 @@ export function stageArtifactDigest(runDir, stage) {
 
 function reviewPrompt(stage, contractText) {
   const stageRules = stage === "planning"
-    ? "检查题材承诺、女主能动性、前三集宣发钩子、全季升级线、目标市场、人物和账本是否自洽。规划尚未获用户批准，可以要求 Planner 修订上游内容。"
+    ? "检查题材承诺、主角能动性、前三集宣发钩子、全季升级线、目标市场、人物和账本是否自洽。规划尚未获用户批准，可以要求 Planner 修订上游内容；复刻项目须服从提供的源大纲保留边界。"
     : stage === "screenplay"
       ? "检查真实剧情、跨集连续性、因果代价、人物能动性、自然双语、市场制度和每集结尾钩子。不要把纯偏好报成缺陷。"
       : "逐镜对照源剧本，检查信息遗漏或篡改、前几集冷开与可剪宣发桥段、节奏时长、动作反应、连续性、双语、可拍性和安全边界。";

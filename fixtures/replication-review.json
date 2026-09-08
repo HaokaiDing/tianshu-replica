@@ -1,0 +1,27 @@
+{
+  "kind": "illustrative_review_cases_not_generated_production",
+  "source": "replication-synthetic/source-outline.md",
+  "sourceKind": "synthetic_test_outline",
+  "episode": 2,
+  "cases": [
+    {
+      "name": "允许补可表演细节",
+      "candidateDetail": "林夏付清仓储费后，将收据折好放进口袋，蹲下来逐个打开工具柜抽屉寻找校准仪。",
+      "expected": "允许作为细节补充，不据此新增偏离finding",
+      "reason": "源第2集已有付费、拿回工具柜、发现校准仪不在的过程；找工具的动作没有改变事件顺序或尾钩。"
+    },
+    {
+      "name": "源剧已有的监控情节",
+      "candidateDetail": "监控回放里，母亲将坏校准仪交到周舟手里，让他带去修理。",
+      "expected": "保留，不因出现监控一词而拒绝",
+      "reason": "合成源第2集已写明这次交接，监控回放是既有情节。应保留它，尾钩仍是周舟带回仪器和未结清的旧工时单。"
+    },
+    {
+      "name": "改变剧情骨架",
+      "candidateDetail": "回放证明周舟偷走校准仪，林夏当场收回仪器并与他结清全部旧账，宣布永不合作。",
+      "expected": "提交有证据的偏离finding，交Planner修订",
+      "sourceEvidence": "源第2集显示母亲主动把坏仪器交给周舟送修，周舟带着未结清的旧工时单回来；第3集林夏才确认欠工时并接受以劳动偿还。",
+      "acceptance": "保留主动送修的事实，将第2集结束状态恢复为旧工时尚待说明，留下第3集协商合作的因果前提。"
+    }
+  ]
+}

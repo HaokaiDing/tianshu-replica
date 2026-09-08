@@ -1,7 +1,7 @@
 {
-  "name": "tianshu-agent",
+  "name": "tianshu-replica",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -9,6 +9,8 @@
   "scripts": {
     "tianshu": "node bin/tianshu.mjs",
     "test": "node --test test/*.test.mjs",
+    "test:replication": "node --test test/replication.test.mjs test/metrics.test.mjs test/replication-integration.test.mjs",
+    "check:environment": "node scripts/check-environment.mjs",
     "experiment:session": "node src/session-topology-experiment.mjs",
     "experiment:e1": "node src/experiments/e1-artifact-workspace.mjs",
     "experiment:e2": "node src/experiments/e2-research-planner.mjs",

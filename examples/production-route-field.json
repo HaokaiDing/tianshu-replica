@@ -1,0 +1,9 @@
+{
+  "name": "产出路线",
+  "type": "select",
+  "multiple": false,
+  "options": [
+    { "name": "天书复刻" },
+    { "name": "ReelClaw" }
+  ]
+}

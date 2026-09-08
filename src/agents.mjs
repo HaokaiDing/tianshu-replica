@@ -8,6 +8,8 @@ import { continuityContext, continuityIsAccepted, extractContinuityUpdate, inval
 import { inferMarketIntent, marketArtifactDigest, marketChecks, marketContractMarkdown, validateMarketSubmission } from "./market.mjs";
 import { loadProductionContract, productionContractDigest, productionContractMarkdown } from "./production-contract.mjs";
 import { reviewStage, stageArtifactDigest } from "./semantic-review.mjs";
+import { appendRunMetrics } from "./metrics.mjs";
+import { replicationPlannerContext } from "./replication.mjs";
 
 const ep = (n) => String(n).padStart(2, "0");
 const batches = (total) => Array.from({length:Math.ceil(total/5)},(_,i)=>({from:i*5+1,to:Math.min(total,i*5+5)}));
@@ -32,26 +34,20 @@ function artifactTools(runDir, workDir) {
   const write=defineTool({name:'write_draft',label:'Write draft',description:'Write the complete current-episode draft only inside this task workspace. This is not the final submission.',parameters:Type.Object({markdown:Type.String({minLength:700})}),async execute(_id,p){writeText(path.join(workDir,'draft.md'),p.markdown);return {content:[{type:'text',text:'draft saved; run checks next'}],details:{}};}});
   return [read,write];
 }
-function writeBatchMetrics(runDir, role, metrics, outcome, extra = {}) {
-  const endedAt = new Date().toISOString();
-  const usage = metrics.usage.reduce((sum, item) => ({
-    input: sum.input + (item.input || 0), output: sum.output + (item.output || 0),
-    cacheRead: sum.cacheRead + (item.cacheRead || 0), cacheWrite: sum.cacheWrite + (item.cacheWrite || 0),
-    totalTokens: sum.totalTokens + (item.totalTokens || 0),
-  }), {input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0});
-  const file = path.join(runDir, 'metrics', `${role}.json`);
-  const record = { role, outcome, endedAt, ...metrics, usageTotal:usage, ...extra };
-  const previous = fs.existsSync(file) ? JSON.parse(readText(file)) : null;
-  const previousAttempts = previous ? (previous.attempts || [{ ...previous, attempts: undefined }]) : [];
-  writeJson(file, { ...record, attempts: [...previousAttempts, record] });
-}
+const writeBatchMetrics = appendRunMetrics;
 export function shortcutChecks(markdown) {
   const failures=[];
   if (/(?:监控(?:摄像头|录像)?|录像|CCTV|security camera|surveillance)/i.test(markdown)) failures.push('禁止把监控或录像作为剧情证据');
   if (/(?:DNA|基因鉴定)/i.test(markdown)) failures.push('禁止使用 DNA 作为翻盘手段');
   return failures;
 }
-export function screenplayChecks(markdown, episode, market, canonicalNames = [], productionContract = null) {
+function plotChecks(markdown, productionRoute) {
+  return productionRoute === "tianshu-replication" ? [] : shortcutChecks(markdown);
+}
+export function storyboardChecks(markdown, market, canonicalNames, productionContract, productionRoute = null) {
+  return [...checkStoryboard(markdown, canonicalNames, productionContract), ...marketChecks(markdown, market), ...plotChecks(markdown, productionRoute)];
+}
+export function screenplayChecks(markdown, episode, market, canonicalNames = [], productionContract = null, productionRoute = null) {
   const failures=[];
   const contract = productionContract || { screenplay: { englishDialogueWordLimit: 260, maxScenes: 4 } };
   if (markdown.length < 700) failures.push('剧本过短');
@@ -73,11 +69,29 @@ export function screenplayChecks(markdown, episode, market, canonicalNames = [],
   if (!/【连续性检查】/.test(markdown)) failures.push('缺少【连续性检查】');
   if (!/(?:（EN）|\(EN\)|(?:EN|英)\s*[:：])|^[A-Za-z][A-Za-z .'-]{1,40}[:：]|\/\s*[A-Za-z][A-Za-z .,'"'!?—-]{4,}/m.test(markdown)) failures.push('缺少英文台词');
   if (!new RegExp(`(?:第?${episode}集|EP(?:ISODE)?\\s*${episode})`, 'i').test(markdown)) failures.push('缺少本集标识');
-  return [...failures, ...screenplayBilingualErrors(markdown), ...fixedEntityErrors(markdown, canonicalNames), ...marketChecks(markdown, market), ...shortcutChecks(markdown)];
+  // A source story may legitimately contain a recording or DNA event. In replica
+  // mode, source fidelity and plot quality belong to the independent Reviewer.
+  const plotErrors = plotChecks(markdown, productionRoute);
+  return [...failures, ...screenplayBilingualErrors(markdown), ...fixedEntityErrors(markdown, canonicalNames), ...marketChecks(markdown, market), ...plotErrors];
 }
+export function planningSystemPrompt(manifest) {
+  const replica = manifest.productionRoute === "tianshu-replication";
+  const goal = replica
+    ? `Adapt the supplied source outline into a ${manifest.episodes}-episode planning bundle. Preserve its event order, conflicts, reversals, character states, and episode hooks; do not invent a new story. Keep planning compact and leave dialogue, action choreography, and scene detail to Writer. Preserve the source protagonist and story mechanisms, including evidence devices when already part of the source; do not impose a different protagonist or genre.`
+    : `Create a strong ${manifest.episodes}-episode vertical-drama plan from the brief. Use one emotion engine, concrete hooks, active heroine, no police/court/DNA/surveillance shortcuts.`;
+  return `You are Tianshu Planner. ${goal} The target market and production contract are hard creative constraints.${replica ? " If a source event conflicts with those constraints, identify it for independent review rather than silently replacing the source event." : ""} The first promotional episodes need immediate, visually legible conflict and extractable payoff beats. Also write a natural-language continuity baseline: immutable identities and world rules, opening custody/debt/knowledge states, and any hard future rails. Do not pretend later episode changes have already happened; those are maintained by the Continuity Agent. Submit only through the tool.`;
+}
+export function planningTaskPrompt(runDir, productionContract, intent, repair = null) {
+  const input = readText(path.join(runDir, "canonical", "input.md"));
+  const sourceContext = replicationPlannerContext(runDir);
+  const repairContext = repair ? `\n\nThis is a bounded planning repair. Preserve every approved strength and change only what the findings require.\nCurrent planning bundle:\n${["acts.md","design.md","outline.md","characters.md","ledger.json","continuity-contract.md"].map((name)=>{const file=path.join(runDir,"canonical",name);return fs.existsSync(file)?`## ${name}\n${readText(file)}`:"";}).join("\n\n")}\n\nRepair plan:\n${JSON.stringify(repair.findings)}` : "";
+  return `Brief:\n${input}\n\nNon-negotiable market intent:\n${marketContractMarkdown(intent)}\n\nProduction contract:\n${productionContractMarkdown(productionContract)}${repairContext}${sourceContext ? `\n\n${sourceContext}` : ""}`;
+}
+
 async function generatePlanningBundle(runDir, repair = null) {
   const m=loadManifest(runDir), input=readText(path.join(runDir,"canonical","input.md")), intent=inferMarketIntent(input); let accepted=false;
   const productionContract = loadProductionContract(runDir);
+  const taskPrompt = planningTaskPrompt(runDir, productionContract, intent, repair);
   const submit=defineTool({
     name:"submit_planning_bundle",
     label:"Submit planning",
@@ -108,9 +122,19 @@ async function generatePlanningBundle(runDir, repair = null) {
     }
   });
   const role = `planner-cycle-${Number(m.reviewCycles?.planning || 0) + 1}`;
-  const {session,metrics}=await createPiExperimentSession({runDir,role,systemPrompt:`You are Tianshu Planner. Create a strong ${m.episodes}-episode vertical-drama plan from the brief. Use one emotion engine, concrete hooks, active heroine, no police/court/DNA/surveillance shortcuts. The target market and production contract are hard creative constraints. The first promotional episodes need immediate, visually legible conflict and extractable payoff beats. Also write a natural-language continuity baseline: immutable identities and world rules, opening custody/debt/knowledge states, and any hard future rails. Do not pretend later episode changes have already happened; those are maintained by the Continuity Agent. Submit only through the tool.`,customTools:[submit],toolNames:["submit_planning_bundle"]});
-  const repairContext = repair ? `\n\nThis is a bounded planning repair. Preserve every approved strength and change only what the findings require.\nCurrent planning bundle:\n${["acts.md","design.md","outline.md","characters.md","ledger.json","continuity-contract.md"].map((name)=>{const file=path.join(runDir,"canonical",name);return fs.existsSync(file)?`## ${name}\n${readText(file)}`:"";}).join("\n\n")}\n\nRepair plan:\n${JSON.stringify(repair.findings)}` : "";
-  try{await promptWithWatchdog(session,metrics,`Brief:\n${input}\n\nNon-negotiable market intent:\n${marketContractMarkdown(intent)}\n\nProduction contract:\n${productionContractMarkdown(productionContract)}${repairContext}`,planningWatchdogMs(m.episodes));if(!accepted)throw new Error("planner did not submit");return metrics;}finally{session.dispose();}
+  const {session,metrics}=await createPiExperimentSession({runDir,role,systemPrompt:planningSystemPrompt(m),customTools:[submit],toolNames:["submit_planning_bundle"]});
+  let outcome = "completed";
+  try {
+    await promptWithWatchdog(session, metrics, taskPrompt, planningWatchdogMs(m.episodes));
+    if (!accepted) throw new Error("planner did not submit");
+    return metrics;
+  } catch (error) {
+    outcome = "failed";
+    throw error;
+  } finally {
+    session.dispose();
+    appendRunMetrics(runDir, role, metrics, outcome);
+  }
 }
 
 export async function plan(runDir) {
@@ -158,7 +182,7 @@ export async function produceScripts(runDir) {
     const workDir=path.join(runDir,'work',`writer-${b.from}-${b.to}`);
     const routeContinuityReject=(episode,error,taskFile,prior={})=>{const durable=fs.existsSync(taskFile)?JSON.parse(readText(taskFile)):prior,attempt=nextContinuityRepairAttempt(durable);return routeContinuityRejectToWriter(runDir,{episode,error,taskFile,prior:durable,attempt,maxAttempts:productionContract.revision.maxContinuityRepairAttempts}).routed;};
     let lastChecks=[];
-    const runChecks=defineTool({name:'run_checks',label:'Check screenplay',description:'Validate the draft for the current episode before submission, including the target-market and production contracts.',parameters:Type.Object({}),async execute(){const draft=path.join(workDir,'draft.md');if(!fs.existsSync(draft))lastChecks=['尚未写入草稿'];else lastChecks=screenplayChecks(readText(draft),active.episode,market,ledgerNames,productionContract);return {content:[{type:'text',text:lastChecks.length?`FAIL: ${lastChecks.join('；')}`:'PASS: draft is eligible for submission'}],details:{failures:lastChecks},terminate:false};}});
+    const runChecks=defineTool({name:'run_checks',label:'Check screenplay',description:'Validate the draft for the current episode before submission, including the target-market and production contracts.',parameters:Type.Object({}),async execute(){const draft=path.join(workDir,'draft.md');if(!fs.existsSync(draft))lastChecks=['尚未写入草稿'];else lastChecks=screenplayChecks(readText(draft),active.episode,market,ledgerNames,productionContract,m.productionRoute);return {content:[{type:'text',text:lastChecks.length?`FAIL: ${lastChecks.join('；')}`:'PASS: draft is eligible for submission'}],details:{failures:lastChecks},terminate:false};}});
     const submit=defineTool({
       name:"submit_screenplay",
       label:"Submit screenplay",
@@ -168,7 +192,7 @@ export async function produceScripts(runDir) {
         if(p.episode!==active.episode)return {content:[{type:"text",text:"REJECTED wrong episode"}],details:{},terminate:false};
         const draft=path.join(workDir,'draft.md');
         if(!fs.existsSync(draft))return {content:[{type:'text',text:'REJECTED no draft'}],details:{},terminate:false};
-        const markdown=readText(draft), errors=screenplayChecks(markdown,p.episode,market,ledgerNames,productionContract);
+        const markdown=readText(draft), errors=screenplayChecks(markdown,p.episode,market,ledgerNames,productionContract,m.productionRoute);
         if(errors.length)return {content:[{type:'text',text:`REJECTED ${errors.join('；')}`}],details:{errors},terminate:false};
         writeText(path.join(runDir,"screenplay",`ep-${ep(p.episode)}.md`),markdown);
         stageContinuityProposal(runDir,{episode:p.episode,screenplay:markdown,proposedUpdate:p.continuityUpdate});
@@ -220,7 +244,7 @@ export async function produceScripts(runDir) {
 }
 export async function produceStoryboards(runDir) {
   const m=loadManifest(runDir);if(!["screenplay_passed","storyboard_producing","storyboard_repairing"].includes(m.state))throw new Error(`storyboard requires screenplay_passed or storyboard repair state, got ${m.state}`);const market=JSON.parse(readText(path.join(runDir,"canonical","market.json"))),marketContract=readText(path.join(runDir,"canonical","market-contract.md")),characters=readText(path.join(runDir,"canonical","characters.md")),ledgerNames=canonicalPersonNames(characters,JSON.parse(readText(path.join(runDir,"canonical","ledger.json"))).names||[]),productionContract=loadProductionContract(runDir),contractDigest=productionContractDigest(productionContract),contractText=productionContractMarkdown(productionContract);m.state="storyboard_producing";saveManifest(runDir,m);
-  for(const b of batches(m.episodes)){let active={episode:b.from};const workDir=path.join(runDir,'work',`storyboard-${b.from}-${b.to}`);const runChecks=defineTool({name:'run_checks',label:'Check storyboard',description:'Validate the saved draft for the current episode before submission, including the target-market and production contracts.',parameters:Type.Object({}),async execute(){const draft=path.join(workDir,'draft.md'),errors=fs.existsSync(draft)?[...checkStoryboard(readText(draft),ledgerNames,productionContract),...marketChecks(readText(draft),market),...shortcutChecks(readText(draft))]:['尚未写入草稿'];const warnings=fs.existsSync(draft)?storyboardWarnings(readText(draft)):[];const warn=warnings.length?`\nWARN(不阻断，但提交前应尽量修正): ${warnings.join('；')}`:'';return {content:[{type:'text',text:(errors.length?`FAIL: ${errors.join('；')}`:'PASS: storyboard is eligible for submission')+warn}],details:{errors,warnings},terminate:false};}});const submit=defineTool({name:"submit_storyboard",label:"Submit storyboard",description:"Submit the checked saved draft. The tool reads the saved draft; never paste a storyboard into this call.",parameters:Type.Object({episode:Type.Integer()}),async execute(_id,p){const draft=path.join(workDir,'draft.md');const errors=p.episode===active.episode&&fs.existsSync(draft)?[...checkStoryboard(readText(draft),ledgerNames,productionContract),...marketChecks(readText(draft),market),...shortcutChecks(readText(draft))]:['wrong episode or missing draft'];if(errors.length)return {content:[{type:"text",text:`REJECTED ${errors.join("; ")}`}],details:{errors},terminate:false};const markdown=readText(draft),source=readText(path.join(runDir,"screenplay",`ep-${ep(p.episode)}.md`));writeText(path.join(runDir,"storyboard",`ep-${ep(p.episode)}.md`),markdown);writeJson(taskPath(runDir,`storyboard-ep-${ep(p.episode)}`),{state:"passed",digest:sha(markdown),sourceScreenplayDigest:sha(source),contractDigest,marketDigest:marketArtifactDigest(runDir),actorRole:"TianshuStoryboardAgent"});return {content:[{type:"text",text:"ACCEPTED storyboard"}],details:{},terminate:true};}});
+  for(const b of batches(m.episodes)){let active={episode:b.from};const workDir=path.join(runDir,'work',`storyboard-${b.from}-${b.to}`);const runChecks=defineTool({name:'run_checks',label:'Check storyboard',description:'Validate the saved draft for the current episode before submission, including the target-market and production contracts.',parameters:Type.Object({}),async execute(){const draft=path.join(workDir,'draft.md'),errors=fs.existsSync(draft)?storyboardChecks(readText(draft),market,ledgerNames,productionContract,m.productionRoute):['尚未写入草稿'];const warnings=fs.existsSync(draft)?storyboardWarnings(readText(draft)):[];const warn=warnings.length?`\nWARN(不阻断，但提交前应尽量修正): ${warnings.join('；')}`:'';return {content:[{type:'text',text:(errors.length?`FAIL: ${errors.join('；')}`:'PASS: storyboard is eligible for submission')+warn}],details:{errors,warnings},terminate:false};}});const submit=defineTool({name:"submit_storyboard",label:"Submit storyboard",description:"Submit the checked saved draft. The tool reads the saved draft; never paste a storyboard into this call.",parameters:Type.Object({episode:Type.Integer()}),async execute(_id,p){const draft=path.join(workDir,'draft.md');const errors=p.episode===active.episode&&fs.existsSync(draft)?storyboardChecks(readText(draft),market,ledgerNames,productionContract,m.productionRoute):['wrong episode or missing draft'];if(errors.length)return {content:[{type:"text",text:`REJECTED ${errors.join("; ")}`}],details:{errors},terminate:false};const markdown=readText(draft),source=readText(path.join(runDir,"screenplay",`ep-${ep(p.episode)}.md`));writeText(path.join(runDir,"storyboard",`ep-${ep(p.episode)}.md`),markdown);writeJson(taskPath(runDir,`storyboard-ep-${ep(p.episode)}`),{state:"passed",digest:sha(markdown),sourceScreenplayDigest:sha(source),contractDigest,marketDigest:marketArtifactDigest(runDir),actorRole:"TianshuStoryboardAgent"});return {content:[{type:"text",text:"ACCEPTED storyboard"}],details:{},terminate:true};}});
     const tools=artifactTools(runDir,workDir), role=`storyboard-${b.from}-${b.to}`;
     const {session,metrics}=await createPiExperimentSession({runDir,role,systemPrompt:`你是天书分镜导演。每次任务必须严格走三步：1) 用 write_draft 写完整分镜；2) 调用 run_checks；3) 只有 PASS 后调用 submit_storyboard 并传当前集数。submit 会读取草稿，绝不把分镜粘进 submit 参数。不要输出解释。表头必须是：| ${STORYBOARD_HEADER.join(" | ")} |。镜头号格式为 epNN-sNN（两位集号+两位镜号）。单元格内换行用 <br>：台词格写"角色：中文台词<br>EN: English line<br>表演：……"（无台词写"无台词"）；运镜格写"运镜 / 景别<br>走位：……"；人物图/场景图格写"人物：……<br>场景：……<br>道具：……"；备注格写"音效：……<br>功能：一个叙事功能标签（如 建立/反应/情绪停留/对峙/揭示/钩子定格）<br>连续性：与上一镜的衔接关系<br>制作：……"。\n\n${contractText}
 节奏与衔接原则：

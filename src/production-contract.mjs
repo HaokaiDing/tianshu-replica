@@ -241,7 +241,7 @@ export function productionContractMarkdown(contract) {
     `# Production Contract｜${contract.profile}`,
     "",
     `- 合同版本：${contract.contractVersion}（schema ${contract.schemaVersion}）`,
-    `- 模式：${contract.legacy ? "旧项目兼容模式" : "女频竖屏短剧"}`,
+    `- 模式：${contract.legacy ? "旧项目兼容模式" : contract.format.audience === "female" ? "女频竖屏短剧" : "竖屏短剧（受众未指定）"}`,
     `- 每集目标时长：${contract.storyboard.episodeDurationSeconds.min}–${contract.storyboard.episodeDurationSeconds.max} 秒`,
     `- 每集镜头：${contract.storyboard.shotCount.min}–${contract.storyboard.shotCount.max} 镜；单镜 ${contract.storyboard.shotDurationSeconds.min}–${contract.storyboard.shotDurationSeconds.max} 秒`,
     `- 剧本限制：最多 ${contract.screenplay.maxScenes} 场；英文对白最多 ${contract.screenplay.englishDialogueWordLimit} 词`,
