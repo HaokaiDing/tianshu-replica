@@ -7,6 +7,7 @@ import { canonicalPersonNames } from "./entities.mjs";
 import { marketArtifactDigest } from "./market.mjs";
 import { loadProductionContract, productionContractDigest } from "./production-contract.mjs";
 import { stageArtifactDigest } from "./semantic-review.mjs";
+import { deliveryScope } from "./sample.mjs";
 
 const ep = (value) => String(value).padStart(2, "0");
 
@@ -113,6 +114,7 @@ export function deliveryGate(runDir) {
   };
   const markdown = markdownDelivery(runDir);
   const report = {
+    ...deliveryScope(manifest),
     passedAt: new Date().toISOString(),
     contractDigest,
     screenplayDigest: sha(screenplayDigests.join("\n")),

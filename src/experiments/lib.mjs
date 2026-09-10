@@ -89,7 +89,7 @@ export async function createPiExperimentSession({ runDir, role, systemPrompt, cu
   const modelRuntime = await ModelRuntime.create();
   const model = modelRuntime.getModel("kimi-coding", "k3-256k");
   if (!model) throw new Error("Pi cannot resolve kimi-coding/k3-256k");
-  const metrics = { role, startedAt: new Date().toISOString(), endedAt: null, prompts: 0, turns: 0, toolCalls: 0, compactions: 0, assistantMessages: 0, usage: [], events: [], modelErrors: [] };
+  const metrics = { role, model: { provider: model.provider, id: model.id }, startedAt: new Date().toISOString(), endedAt: null, prompts: 0, promptAttempts: [], turns: 0, toolCalls: 0, compactions: 0, assistantMessages: 0, usage: [], events: [], modelErrors: [] };
   const { session } = await createAgentSession({
     cwd: ROOT,
     modelRuntime,
@@ -117,16 +117,36 @@ export async function createPiExperimentSession({ runDir, role, systemPrompt, cu
 
 export async function promptWithWatchdog(session, metrics, prompt, timeoutMs = 180_000) {
   const prefix = metrics.prompts === 0 ? sessionPrefixes.get(session) : "";
-  metrics.prompts += 1;
+  metrics.prompts = (metrics.prompts ?? 0) + 1;
+  metrics.promptAttempts ??= [];
+  const promptIndex = metrics.prompts;
   const request = prefix ? `Role instructions for this session:\n${prefix}\n\nTask:\n${prompt}` : prompt;
   for (let attempt = 0; attempt < 3; attempt++) {
     const errorsBefore = metrics.modelErrors?.length || 0;
     let timeout = false;
+    const record = {
+      promptIndex,
+      retryIndex: attempt,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      status: "running",
+      assistantMessagesBefore: metrics.assistantMessages ?? null,
+      assistantMessagesAfter: null,
+    };
+    metrics.promptAttempts.push(record);
     const timer = setTimeout(() => { timeout = true; void session.abort(); }, timeoutMs);
     try {
       await session.prompt(request);
+      record.status = timeout ? "timeout" : (metrics.modelErrors?.length || 0) > errorsBefore ? "error" : "succeeded";
+      if (record.status === "error") record.reason = "model_error";
+    } catch (error) {
+      record.status = timeout ? "timeout" : "error";
+      record.reason = timeout ? "watchdog_timeout" : "prompt_rejected";
+      throw error;
     } finally {
       clearTimeout(timer);
+      record.endedAt = new Date().toISOString();
+      record.assistantMessagesAfter = metrics.assistantMessages ?? null;
     }
     if (timeout) throw new Error(`Pi task exceeded ${timeoutMs}ms watchdog`);
     if ((metrics.modelErrors?.length || 0) === errorsBefore) return;

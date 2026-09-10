@@ -4,6 +4,7 @@ node_modules/
 .DS_Store
 /experiments/
 /runs/
+/.queue/
 __pycache__/
 *.pyc
 

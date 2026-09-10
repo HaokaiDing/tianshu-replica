@@ -113,3 +113,9 @@ test('60-episode planning gets a longer watchdog without changing 30-episode pro
   assert.equal(planningWatchdogMs(30),180_000);
   assert.equal(planningWatchdogMs(60),600_000);
 });
+
+test('screenplay scene limit counts English SCENE headings used by the Writer', () => {
+  const market = { anchors: [], bannedContext: [] };
+  const markdown = Array.from({ length: 5 }, (_, i) => `## SCENE ${i + 1}\n一段动作与对白。`).join('\n');
+  assert.ok(screenplayChecks(markdown, 1, market).includes('场景过多 5（上限 4）'));
+});

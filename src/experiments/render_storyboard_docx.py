@@ -18,7 +18,7 @@ def cells(line: str):
     return [item.strip() for item in line.strip().split("|")[1:-1]]
 
 
-def set_cell_margins(cell, top=60, start=60, bottom=60, end=60):
+def set_cell_margins(cell, top=80, start=80, bottom=80, end=80):
     tc = cell._tc
     tc_pr = tc.get_or_add_tcPr()
     mar = tc_pr.first_child_found_in("w:tcMar")
@@ -64,7 +64,7 @@ def prevent_row_split(row):
     tr_pr.append(cant_split)
 
 
-def put_text(cell, text, *, bold=False, size=6.5, color=None, center=False):
+def put_text(cell, text, *, bold=False, size=8, color=None, center=False):
     cell.text = ""
     for index, part in enumerate(text.split("<br>")):
         paragraph = cell.paragraphs[0] if index == 0 else cell.add_paragraph()
@@ -93,6 +93,7 @@ def add_storyboard(doc, heading, header, rows, *, page_break_before=False):
     if len(header) != 7 or any(len(row) != 7 for row in rows):
         raise ValueError("expected a strict 7-column storyboard table")
     title = doc.add_paragraph()
+    title.style = doc.styles["Title"]
     title.paragraph_format.page_break_before = page_break_before
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = title.add_run(heading)
@@ -100,11 +101,21 @@ def add_storyboard(doc, heading, header, rows, *, page_break_before=False):
     run.font.name = BODY_FONT
     run._element.rPr.rFonts.set(qn("w:eastAsia"), BODY_FONT)
     run.font.size = Pt(13)
+    run.font.color.rgb = RGBColor(0, 0, 0)
     title.paragraph_format.space_after = Pt(5)
     table = doc.add_table(rows=1, cols=7)
     table.style = "Table Grid"
     table.autofit = False
-    widths = [0.50, 2.20, 2.40, 1.50, 1.60, 1.60, 0.65]
+    widths = [0.60, 2.30, 2.25, 1.35, 1.50, 1.95, 0.55]
+    for column, width in zip(table.columns, widths):
+        column.width = Inches(width)
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = OxmlElement(f"w:{edge}")
+        for key, value in (("val", "single"), ("sz", "4"), ("color", "D9D9D9")):
+            border.set(qn(f"w:{key}"), value)
+        borders.append(border)
+    table._tbl.tblPr.append(borders)
     header_row = table.rows[0]
     repeat_header(header_row)
     for index, value in enumerate(header):
@@ -113,22 +124,27 @@ def add_storyboard(doc, heading, header, rows, *, page_break_before=False):
         set_cell_margins(cell)
         shade(cell, "1F4E78")
         cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-        put_text(cell, value, bold=True, size=6, color=(255, 255, 255), center=True)
-    for values in rows:
+        put_text(cell, value, bold=True, size=7, color=(255, 255, 255), center=True)
+    for row_index, values in enumerate(rows):
         row = table.add_row()
         prevent_row_split(row)
         for index, value in enumerate(values):
             cell = row.cells[index]
             set_width(cell, widths[index])
             set_cell_margins(cell)
+            if row_index % 2:
+                shade(cell, "F3F6FA")
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-            put_text(cell, value, size=6.5, center=index in (0, 6))
+            put_text(cell, value, size=8, center=index in (0, 6))
 def main(input_path: Path, output_path: Path):
     chunks = [chunk for chunk in input_path.read_text(encoding="utf-8").split("\n---\n") if chunk.strip()]
     parsed = [parse_markdown(chunk) for chunk in chunks]
     if any(len(header) != 7 or any(len(row) != 7 for row in rows) for _, header, rows in parsed):
         raise ValueError("expected a strict 7-column storyboard table")
     doc = Document()
+    title_properties = doc.styles["Title"].element.get_or_add_pPr()
+    for border in list(title_properties.findall(qn("w:pBdr"))):
+        title_properties.remove(border)
     section = doc.sections[0]
     section.orientation = WD_ORIENT.LANDSCAPE
     section.page_width, section.page_height = section.page_height, section.page_width

@@ -10,6 +10,7 @@ import { loadProductionContract, productionContractDigest, productionContractMar
 import { reviewStage, stageArtifactDigest } from "./semantic-review.mjs";
 import { appendRunMetrics } from "./metrics.mjs";
 import { replicationPlannerContext } from "./replication.mjs";
+import { sampleContext } from "./sample.mjs";
 
 const ep = (n) => String(n).padStart(2, "0");
 const batches = (total) => Array.from({length:Math.ceil(total/5)},(_,i)=>({from:i*5+1,to:Math.min(total,i*5+5)}));
@@ -63,7 +64,7 @@ export function screenplayChecks(markdown, episode, market, canonicalNames = [],
   const englishDialogue = englishSegments.join(' ').trim();
   const englishDialogueWords = englishDialogue ? englishDialogue.split(/\s+/).filter(Boolean).length : 0;
   if (englishDialogueWords > contract.screenplay.englishDialogueWordLimit) failures.push(`英文对白过长 ${englishDialogueWords} 词（上限 ${contract.screenplay.englishDialogueWordLimit}）`);
-  const sceneCount = (markdown.match(/^##\s*场景/gm) || []).length;
+  const sceneCount = (markdown.match(/^##\s*(?:场景|SCENE\b)/gim) || []).length;
   if (sceneCount > contract.screenplay.maxScenes) failures.push(`场景过多 ${sceneCount}（上限 ${contract.screenplay.maxScenes}）`);
   if (!/【本集钩子】/.test(markdown)) failures.push('缺少【本集钩子】');
   if (!/【连续性检查】/.test(markdown)) failures.push('缺少【连续性检查】');
@@ -79,13 +80,14 @@ export function planningSystemPrompt(manifest) {
   const goal = replica
     ? `Adapt the supplied source outline into a ${manifest.episodes}-episode planning bundle. Preserve its event order, conflicts, reversals, character states, and episode hooks; do not invent a new story. Keep planning compact and leave dialogue, action choreography, and scene detail to Writer. Preserve the source protagonist and story mechanisms, including evidence devices when already part of the source; do not impose a different protagonist or genre.`
     : `Create a strong ${manifest.episodes}-episode vertical-drama plan from the brief. Use one emotion engine, concrete hooks, active heroine, no police/court/DNA/surveillance shortcuts.`;
-  return `You are Tianshu Planner. ${goal} The target market and production contract are hard creative constraints.${replica ? " If a source event conflicts with those constraints, identify it for independent review rather than silently replacing the source event." : ""} The first promotional episodes need immediate, visually legible conflict and extractable payoff beats. Also write a natural-language continuity baseline: immutable identities and world rules, opening custody/debt/knowledge states, and any hard future rails. Do not pretend later episode changes have already happened; those are maintained by the Continuity Agent. Submit only through the tool.`;
+  return `You are Tianshu Planner. ${goal} The target market and production contract are hard creative constraints.${replica ? " If a source event conflicts with those constraints, identify it for independent review rather than silently replacing the source event." : ""} The first promotional episodes need immediate, visually legible conflict and extractable payoff beats. Also write a natural-language continuity baseline: immutable identities and world rules, opening custody/debt/knowledge states, and any hard future rails. Do not pretend later episode changes have already happened; those are maintained by the Continuity Agent. Submit only through the tool.${sampleContext(manifest) ? `\n\n${sampleContext(manifest)}` : ""}`;
 }
 export function planningTaskPrompt(runDir, productionContract, intent, repair = null) {
   const input = readText(path.join(runDir, "canonical", "input.md"));
   const sourceContext = replicationPlannerContext(runDir);
   const repairContext = repair ? `\n\nThis is a bounded planning repair. Preserve every approved strength and change only what the findings require.\nCurrent planning bundle:\n${["acts.md","design.md","outline.md","characters.md","ledger.json","continuity-contract.md"].map((name)=>{const file=path.join(runDir,"canonical",name);return fs.existsSync(file)?`## ${name}\n${readText(file)}`:"";}).join("\n\n")}\n\nRepair plan:\n${JSON.stringify(repair.findings)}` : "";
-  return `Brief:\n${input}\n\nNon-negotiable market intent:\n${marketContractMarkdown(intent)}\n\nProduction contract:\n${productionContractMarkdown(productionContract)}${repairContext}${sourceContext ? `\n\n${sourceContext}` : ""}`;
+  const scopeContext = sampleContext(loadManifest(runDir));
+  return `Brief:\n${input}\n\nNon-negotiable market intent:\n${marketContractMarkdown(intent)}\n\nProduction contract:\n${productionContractMarkdown(productionContract)}${repairContext}${sourceContext ? `\n\n${sourceContext}` : ""}${scopeContext ? `\n\n${scopeContext}` : ""}`;
 }
 
 async function generatePlanningBundle(runDir, repair = null) {
@@ -137,14 +139,27 @@ async function generatePlanningBundle(runDir, repair = null) {
   }
 }
 
+export function completedPlanningMetrics(runDir) {
+  const manifest = loadManifest(runDir);
+  if (manifest.state !== "planning") return null;
+  const cycle = Number(manifest.reviewCycles?.planning || 0) + 1;
+  const file = path.join(runDir, "metrics", `planner-cycle-${cycle}.json`);
+  if (!fs.existsSync(file)) return null;
+  const metrics = JSON.parse(readText(file));
+  const artifacts = ["acts.md", "design.md", "outline.md", "characters.md", "ledger.json", "continuity-contract.md", "market.json", "market-contract.md"];
+  return metrics.outcome === "completed" && artifacts.every((name) => fs.existsSync(path.join(runDir, "canonical", name))) ? metrics : null;
+}
+
 export async function plan(runDir) {
   const manifest = loadManifest(runDir);
   if (!["draft", "planning", "returned"].includes(manifest.state)) throw new Error(`plan requires draft, planning, or returned; got ${manifest.state}`);
+  let pendingMetrics = completedPlanningMetrics(runDir);
   manifest.state = "planning";
   saveManifest(runDir, manifest);
   let repair = null;
   while (true) {
-    const metrics = await generatePlanningBundle(runDir, repair);
+    const metrics = pendingMetrics || await generatePlanningBundle(runDir, repair);
+    pendingMetrics = null;
     const report = await reviewStage(runDir, "planning");
     const current = loadManifest(runDir);
     current.planMetrics = metrics;
@@ -203,7 +218,7 @@ export async function produceScripts(runDir) {
       }
     });
     const tools=artifactTools(runDir,workDir), role=`writer-${b.from}-${b.to}`;
-    const {session,metrics}=await createPiExperimentSession({runDir,role,systemPrompt:`你是天书剧本作者，一次只做指定的一集。每次任务必须严格走三步：1) 用 write_draft 写完整剧本；2) 调用 run_checks；3) 仅在收到 PASS 后调用 submit_screenplay，提交当前集数和本集自然语言 continuityUpdate。continuityUpdate 只写本集真正发生的状态变化。你不能直接修改连续性合同，独立 Continuity Agent 会复核。submit 会读取草稿，绝不把剧本粘进参数。不要输出解释、不要停在半成品。每句对白必须连续写成角色（中）和角色（EN）两行。剧本必须有【本集钩子】和【连续性检查】。冲突必须产生后果。市场合同、生产合同与连续性合同都是硬约束。\n\n${contractText}`,customTools:[...tools,runChecks,submit],toolNames:["read_artifact","write_draft","run_checks","submit_screenplay"]});
+    const {session,metrics}=await createPiExperimentSession({runDir,role,systemPrompt:`你是天书剧本作者，一次只做指定的一集。产物是按场景组织的剧本、动作与双语对白，不预先生成逐镜分镜表或逐镜时间码；具体拆镜与单镜时长交下游分镜阶段。每次任务必须严格走三步：1) 用 write_draft 写完整剧本；2) 调用 run_checks；3) 仅在收到 PASS 后调用 submit_screenplay，提交当前集数和本集自然语言 continuityUpdate。continuityUpdate 只写本集真正发生的状态变化。你不能直接修改连续性合同，独立 Continuity Agent 会复核。submit 会读取草稿，绝不把剧本粘进参数。不要输出解释、不要停在半成品。每句对白必须连续写成角色（中）和角色（EN）两行。剧本必须有【本集钩子】和【连续性检查】。冲突必须产生后果。市场合同、生产合同与连续性合同都是硬约束。\n\n${contractText}`,customTools:[...tools,runChecks,submit],toolNames:["read_artifact","write_draft","run_checks","submit_screenplay"]});
     let outcome='completed';
     try{
       for(let n=b.from;n<=b.to;n++){
@@ -225,7 +240,7 @@ export async function produceScripts(runDir) {
         const continuity=continuityContext(runDir);
         const nearby=[n-1,n+1].filter(x=>x>=1&&x<=m.episodes).map(x=>{const f=path.join(runDir,'screenplay',`ep-${ep(x)}.md`);return fs.existsSync(f)?`第${x}集：\n${readText(f).slice(0,14000)}`:'';}).filter(Boolean).join('\n\n');
         const repair=prior?.repairInstruction?`\n这是修订任务。保留下面现有剧本的有效内容，只修复列出的缺陷。\n现有剧本：\n${fs.existsSync(artifact)?readText(artifact).slice(0,30000):''}\n修订要求：\n${prior.repairInstruction}`:"";
-        const taskPrompt=`只写第 ${n} 集，并按 write_draft → run_checks → submit_screenplay 的顺序调用工具。\n市场与文化合同：\n${marketContract}\n\n生产合同：\n${contractText}\n\n静态连续性合同：\n${continuity.contract.slice(0,18000)}\n\n截至上一集的动态连续性快照：\n${continuity.current.snapshot.slice(0,12000)}\n\n本集及相邻集大纲：\n${outlineWindow(outline,n,m.episodes)}\n人物：${chars.slice(0,12000)}\n初始台账：${ledger.slice(0,8000)}\n相邻集上下文：\n${nearby}${repair}`;
+        const taskPrompt=`${sampleContext(m)}\n只写第 ${n} 集，并按 write_draft → run_checks → submit_screenplay 的顺序调用工具。\n市场与文化合同：\n${marketContract}\n\n生产合同：\n${contractText}\n\n静态连续性合同：\n${continuity.contract.slice(0,18000)}\n\n截至上一集的动态连续性快照：\n${continuity.current.snapshot.slice(0,12000)}\n\n本集及相邻集大纲：\n${outlineWindow(outline,n,m.episodes)}\n人物：${chars.slice(0,12000)}\n初始台账：${ledger.slice(0,8000)}\n相邻集上下文：\n${nearby}${repair}`;
         await promptWithWatchdog(session,metrics,taskPrompt,1800000);
         if(!fs.existsSync(artifact))await promptWithWatchdog(session,metrics,`上一回合没有生成第 ${n} 集正式文件。现在只做三步：write_draft；run_checks；submit_screenplay，同时提交 continuityUpdate。不要解释，不要开始别集。`,120000);
         if(!fs.existsSync(artifact))throw new Error(`writer did not submit episode ${n}`);
@@ -248,26 +263,37 @@ export async function produceStoryboards(runDir) {
     const tools=artifactTools(runDir,workDir), role=`storyboard-${b.from}-${b.to}`;
     const {session,metrics}=await createPiExperimentSession({runDir,role,systemPrompt:`你是天书分镜导演。每次任务必须严格走三步：1) 用 write_draft 写完整分镜；2) 调用 run_checks；3) 只有 PASS 后调用 submit_storyboard 并传当前集数。submit 会读取草稿，绝不把分镜粘进 submit 参数。不要输出解释。表头必须是：| ${STORYBOARD_HEADER.join(" | ")} |。镜头号格式为 epNN-sNN（两位集号+两位镜号）。单元格内换行用 <br>：台词格写"角色：中文台词<br>EN: English line<br>表演：……"（无台词写"无台词"）；运镜格写"运镜 / 景别<br>走位：……"；人物图/场景图格写"人物：……<br>场景：……<br>道具：……"；备注格写"音效：……<br>功能：一个叙事功能标签（如 建立/反应/情绪停留/对峙/揭示/钩子定格）<br>连续性：与上一镜的衔接关系<br>制作：……"。\n\n${contractText}
 节奏与衔接原则：
+- 以剧本正文的实际动作、对白和时间线为准；头部钩子说明和尾部自检若与正文不符，不能覆盖正文，也不能据其添加新事件。
+- 母本若带拍点或参考时间码，保留其剧情和节奏功能，再按生产合同合并或拆分为合规镜头；参考拍点不等于必须原样照搬的最终镜头。
 - 一镜一事：每个镜头只承载一个新信息点（新道具、新事实或新伏笔）。
 - 动作有反应：重要台词或动作之后给情绪停留镜，高潮前留呼吸，不每镜都推进新情节。
 - 台词有落点：定调台词或新场景建立镜之后，先给反应/停留镜再进入新节拍，不说完就走。
 - 钩子独立：本集钩子镜独立成镜并给足特写时长，不与其他信息合并。
 - 衔接显式化：同时空连续镜在备注格"连续性"行写明继承的视线、站位、道具；时空跳转先给建立镜再切近景。市场合同是硬约束：镜头中的人物、场景、道具、建筑、机构、服装和视觉提示必须属于目标国家，而非默认中国语境。`,customTools:[...tools,runChecks,submit],toolNames:["read_artifact","write_draft","run_checks","submit_storyboard"]});
-    let outcome='completed';try{for(let n=b.from;n<=b.to;n++){const task=taskPath(runDir,`storyboard-ep-${ep(n)}`);const artifact=path.join(runDir,"storyboard",`ep-${ep(n)}.md`);const source=readText(path.join(runDir,"screenplay",`ep-${ep(n)}.md`));const prior=fs.existsSync(task)?JSON.parse(readText(task)):null;if(prior?.state==='passed'&&fs.existsSync(artifact)&&prior.digest===sha(readText(artifact))&&prior.contractDigest===contractDigest&&prior.sourceScreenplayDigest===sha(source))continue;active.episode=n;const repair=prior?.repairInstruction?`\n\n这是受约束的分镜修订任务。保留有效内容，只修下面的问题。\n现有分镜：\n${fs.existsSync(artifact)?readText(artifact):""}\n修订要求：\n${prior.repairInstruction}`:"";await promptWithWatchdog(session,metrics,`只制作第 ${n} 集，按 write_draft → run_checks → submit_storyboard 的顺序调用工具。\n市场与文化合同：\n${marketContract}\n\n生产合同：\n${contractText}\n\n剧本：\n${source}${repair}`,1800000);if(!fs.existsSync(artifact))throw new Error(`storyboard agent did not submit episode ${n}`);}}catch(error){outcome='failed';writeBatchMetrics(runDir,role,metrics,outcome,{error:error.message});throw error;}finally{session.dispose();}writeBatchMetrics(runDir,role,metrics,outcome);}
+    let outcome='completed';try{for(let n=b.from;n<=b.to;n++){const task=taskPath(runDir,`storyboard-ep-${ep(n)}`);const artifact=path.join(runDir,"storyboard",`ep-${ep(n)}.md`);const source=readText(path.join(runDir,"screenplay",`ep-${ep(n)}.md`));const prior=fs.existsSync(task)?JSON.parse(readText(task)):null;if(prior?.state==='passed'&&fs.existsSync(artifact)&&prior.digest===sha(readText(artifact))&&prior.contractDigest===contractDigest&&prior.sourceScreenplayDigest===sha(source))continue;active.episode=n;const repair=prior?.repairInstruction?`\n\n这是受约束的分镜修订任务。保留有效内容，只修下面的问题。\n现有分镜：\n${fs.existsSync(artifact)?readText(artifact):""}\n修订要求：\n${prior.repairInstruction}`:"";await promptWithWatchdog(session,metrics,`${sampleContext(m)}\n只制作第 ${n} 集，按 write_draft → run_checks → submit_storyboard 的顺序调用工具。\n市场与文化合同：\n${marketContract}\n\n生产合同：\n${contractText}\n\n剧本：\n${source}${repair}`,1800000);if(!fs.existsSync(artifact))throw new Error(`storyboard agent did not submit episode ${n}`);}}catch(error){outcome='failed';writeBatchMetrics(runDir,role,metrics,outcome,{error:error.message});throw error;}finally{session.dispose();}writeBatchMetrics(runDir,role,metrics,outcome);}
   m.state="storyboard_reviewing";saveManifest(runDir,m);
 }
 
-export async function reviewScripts(runDir) {
-  const m=loadManifest(runDir);if(m.state!=="screenplay_reviewing")throw new Error(`screenplay review requires screenplay_reviewing, got ${m.state}`);
-  const report=await reviewStage(runDir,"screenplay"),current=loadManifest(runDir);
+export async function reviewScripts(runDir, { operatorNote = "" } = {}) {
+  const m=loadManifest(runDir);
+  if(m.state!=="screenplay_reviewing") {
+    const latest=path.join(runDir,"reviews","screenplay-latest.json");
+    if(m.state!=="needs_human_review"||!operatorNote.trim()||!fs.existsSync(latest)||JSON.parse(readText(latest)).plan?.action!=="blocked")throw new Error(`screenplay review requires screenplay_reviewing, or an explicit review note for a blocked screenplay review; got ${m.state}`);
+  }
+  const report=await reviewStage(runDir,"screenplay",{operatorNote}),current=loadManifest(runDir);
   if(report.plan.action==="pass"){current.state="screenplay_passed";current.note="screenplay passed independent series review";}
   else if(report.plan.action==="repair"){current.state="screenplay_repairing";current.note=`screenplay repair cycle ${report.cycle}`;}
   saveManifest(runDir,current);return report;
 }
 
-export async function reviewStoryboards(runDir) {
-  const m=loadManifest(runDir);if(m.state!=="storyboard_reviewing")throw new Error(`storyboard review requires storyboard_reviewing, got ${m.state}`);
-  const report=await reviewStage(runDir,"storyboard"),current=loadManifest(runDir);
+export async function reviewStoryboards(runDir, { operatorNote = "" } = {}) {
+  const m=loadManifest(runDir);
+  if(m.state!=="storyboard_reviewing") {
+    const latest=path.join(runDir,"reviews","storyboard-latest.json");
+    const expectedAction=m.state==="storyboard_repairing"?"repair":m.state==="needs_human_review"?"blocked":null;
+    if(!expectedAction||!operatorNote.trim()||!fs.existsSync(latest)||JSON.parse(readText(latest)).plan?.action!==expectedAction)throw new Error(`storyboard review requires storyboard_reviewing, or an explicit review note for a pending repair or blocked storyboard review; got ${m.state}`);
+  }
+  const report=await reviewStage(runDir,"storyboard",{operatorNote}),current=loadManifest(runDir);
   if(report.plan.action==="pass"){current.state="final_review";current.note="storyboard passed independent series review";}
   else if(report.plan.action==="repair"){current.state="storyboard_repairing";current.note=`storyboard repair cycle ${report.cycle}`;}
   saveManifest(runDir,current);return report;

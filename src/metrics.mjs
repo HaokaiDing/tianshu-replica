@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { deliveryScope } from "./sample.mjs";
 
 const fields = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"];
 const reported = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -21,6 +22,12 @@ export function collectUsage(metrics, event) {
   const usage = event.message.usage;
   metrics.usage.push({
     at,
+    model: {
+      provider: event.message.provider ?? metrics.model?.provider ?? null,
+      id: event.message.model ?? metrics.model?.id ?? null,
+    },
+    // Preserve the SDK's fields; input/cache/output semantics are not rewritten here.
+    rawUsage: usage && typeof usage === "object" ? { ...usage } : null,
     ...Object.fromEntries(fields.map((field) => [field, reported(usage?.[field]) ? usage[field] : null])),
   });
 }
@@ -43,10 +50,59 @@ export function summarizeUsage(metrics = {}) {
     usageTotal,
     usageKnown,
     usageCoverage: {
+      scope: "recorded_assistant_messages",
       status: !covered ? "unknown" : fields.every((field) => coverage[field].complete) ? "complete" : "partial",
       assistantMessages: Number.isInteger(count) && count >= 0 ? count : null,
       recordedMessages: rows.length,
       fields: coverage,
+    },
+  };
+}
+
+export function summarizePromptRequests(metrics = {}) {
+  const rows = Array.isArray(metrics.promptAttempts) ? metrics.promptAttempts : [];
+  const prompts = Number.isInteger(metrics.prompts) && metrics.prompts >= 0 ? metrics.prompts : null;
+  const indices = rows.map((row) => row.promptIndex);
+  const inventoryComplete = Array.isArray(metrics.promptAttempts) && prompts !== null
+    && indices.every((index) => Number.isInteger(index) && index >= 1 && index <= prompts)
+    && new Set(indices).size === prompts;
+  const count = (status) => rows.filter((row) => row.status === status).length;
+  const succeededAttempts = count("succeeded");
+  const errorAttempts = count("error");
+  const timeoutAttempts = count("timeout");
+  const unfinishedAttempts = rows.filter((row) => !row.endedAt
+    || !["succeeded", "error", "timeout"].includes(row.status)).length;
+  const reasons = [];
+  if (!inventoryComplete) reasons.push("prompt_attempt_inventory_incomplete");
+  if (errorAttempts) reasons.push("prompt_error_may_have_unreported_provider_usage");
+  if (timeoutAttempts) reasons.push("prompt_timeout_may_have_unreported_provider_usage");
+  if (unfinishedAttempts) reasons.push("prompt_attempt_outcome_unknown");
+  return {
+    scope: "session.prompt",
+    status: reasons.length ? "unknown" : "complete",
+    promptInvocations: prompts,
+    recordedAttempts: rows.length,
+    succeededAttempts,
+    errorAttempts,
+    timeoutAttempts,
+    unfinishedAttempts,
+    reasons,
+  };
+}
+
+function accountingLimits() {
+  return {
+    providerRequestCoverage: {
+      scope: "raw_provider_requests",
+      status: "unknown",
+      actualCallCount: null,
+      reason: "session.prompt may issue multiple provider requests; their inventory is not recorded",
+    },
+    cost: {
+      status: "unknown",
+      amount: null,
+      currency: null,
+      reason: "provider billing and pricing evidence is not recorded",
     },
   };
 }
@@ -61,6 +117,8 @@ export function appendRunMetrics(runDir, role, metrics, outcome, extra = {}) {
     startedAt: metrics.startedAt ?? null,
     endedAt: metrics.endedAt ?? new Date().toISOString(),
     ...summarizeUsage(metrics),
+    promptRequestCoverage: summarizePromptRequests(metrics),
+    ...accountingLimits(),
   };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
@@ -74,6 +132,22 @@ function summarizeAttempts(attempts) {
   const knownCoverage = attempts.length > 0 && summaries.every((summary) => summary.usageCoverage.status !== "unknown");
   const usage = attempts.flatMap((attempt) => Array.isArray(attempt.usage) ? attempt.usage : []);
   const summary = summarizeUsage({ usage, assistantMessages: knownCoverage ? usage.length : null });
+  const promptSummaries = attempts.map(summarizePromptRequests);
+  const promptRequestCoverage = {
+    scope: "session.prompt",
+    status: attempts.length && promptSummaries.every((item) => item.status === "complete") ? "complete" : "unknown",
+    promptInvocations: attempts.length && promptSummaries.every((item) => item.promptInvocations !== null)
+      ? promptSummaries.reduce((total, item) => total + item.promptInvocations, 0) : null,
+    ...Object.fromEntries(["recordedAttempts", "succeededAttempts", "errorAttempts", "timeoutAttempts", "unfinishedAttempts"]
+      .map((field) => [field, promptSummaries.reduce((total, item) => total + item[field], 0)])),
+    reasons: [...new Set(attempts.length ? promptSummaries.flatMap((item) => item.reasons) : ["no_recorded_attempts"])],
+  };
+  const models = [];
+  for (const model of [...attempts.map((attempt) => attempt.model), ...usage.map((row) => row.model)]) {
+    if (!model || (!model.provider && !model.id)) continue;
+    const entry = { provider: model.provider ?? null, id: model.id ?? null };
+    if (!models.some((known) => known.provider === entry.provider && known.id === entry.id)) models.push(entry);
+  }
   const intervals = attempts.map((attempt) => {
     const start = typeof attempt.startedAt === "string" ? Date.parse(attempt.startedAt) : NaN;
     const end = typeof attempt.endedAt === "string" ? Date.parse(attempt.endedAt) : NaN;
@@ -86,6 +160,9 @@ function summarizeAttempts(attempts) {
   return {
     attemptCount: attempts.length,
     ...summary,
+    promptRequestCoverage,
+    ...accountingLimits(),
+    models,
     startedAt: start === null ? null : new Date(start).toISOString(),
     endedAt: end === null ? null : new Date(end).toISOString(),
     // Span of recorded attempts, including idle gaps; overlapping stages are never added.
@@ -112,5 +189,5 @@ export function readRunMetrics(runDir) {
   }
   const manifestFile = path.join(runDir, "manifest.json");
   const manifest = fs.existsSync(manifestFile) ? JSON.parse(fs.readFileSync(manifestFile, "utf8")) : {};
-  return { route: manifest.productionRoute ?? null, ...summarizeAttempts(attempts), roles, attempts };
+  return { ...(fs.existsSync(manifestFile) ? deliveryScope(manifest) : {}), route: manifest.productionRoute ?? null, ...summarizeAttempts(attempts), roles, attempts };
 }
